@@ -14,15 +14,23 @@
     { id: "rashi", he: "רש״י", en: "Rashi", dir: "data/rashi/", enDir: "data/rashi-en/" },
     { id: "ramban", he: "רמב״ן", en: "Ramban", dir: "data/ramban/", enDir: "data/ramban-en/", introDir: "data/ramban-intro/", enSrc: "Chavel" },
     { id: "bachya", he: "רבנו בחיי", heIntro: "הקדמת רבנו בחיי", en: "Rabbeinu Bachya", dir: "data/bachya/", enDir: "data/bachya-en/", introDir: "data/bachya-intro/", enSrc: "Munk", note: "Torah" },
+    { id: "sforno", he: "ספורנו", heIntro: "הקדמת הספורנו", en: "Sforno", dir: "data/sforno/", enDir: "data/sforno-en/", introDir: "data/sforno-intro/", enSrc: "Munk", note: "Torah and Shir Hashirim" },
   ];
   const introName = (c) => c.heIntro || `הקדמת ה${c.he}`;
   /* Pages layout: each commentary can be switched on or off */
   const pgOn = (c) => settings["pg_" + c.id] !== false;
+  /* …and put in the reader's order (Settings › Pages mode); a commentary added later goes at the end */
+  const pgOrdered = () => {
+    const ord = Array.isArray(settings.pg_order) ? settings.pg_order : [];
+    const rank = (c) => { const i = ord.indexOf(c.id); return i < 0 ? 100 + COMMENTARIES.indexOf(c) : i; };
+    return [...COMMENTARIES].sort((a, b) => rank(a) - rank(b));
+  };
+  const pgComms = (slug) => pgOrdered().filter((c) => avail(c, slug) && pgOn(c));
   const commMeta = (id) => COMMENTARIES.find((c) => c.id === id);
   /* which commentaries exist for a sefer, and which ones the current layout shows */
   const avail = (c, slug) => (INDEX && INDEX.comm && INDEX.comm[c.id] ? INDEX.comm[c.id].includes(slug) : c.id === "rashi");
   const activeComms = (slug) => settings.view === "pages"
-    ? COMMENTARIES.filter((c) => avail(c, slug) && pgOn(c))
+    ? pgComms(slug)
     : COMMENTARIES.filter((c) => c.id === ((readerState && readerState.tab) || "rashi") && avail(c, slug));
 
   /* ───────── Storage (safe) ───────── */
@@ -35,7 +43,7 @@
     mode: "side", nikkud: true, taamim: true, theme: "paper",
     rashiScript: true, rashiEn: true, rashiOpen: false, rashiLines: false, notes: true, copyFmt: "both",
     maftir: true, weekday: false, haftarah: true, haftCustom: "a", petuchot: true, sedarim: true, view: "scroll",
-    pg_rashi: true, pg_ramban: true, pg_bachya: true,
+    pg_rashi: true, pg_ramban: true, pg_bachya: true, pg_sforno: true, pg_order: ["rashi", "ramban", "bachya", "sforno"],
   };
   const settings = Object.assign({}, DEFAULTS, store.get("settings", {}));
   if (settings.inlineRashi) settings.rashiOpen = true;
@@ -449,11 +457,11 @@
 
   async function renderPages(r, text) {
     const app = $("#app"), slug = r.slug, b = book(slug);
-    const comms = COMMENTARIES.filter((c) => avail(c, slug) && pgOn(c));
+    const comms = pgComms(slug);
     if (!comms.every((c) => resolved.has(commUrl(c.id, slug)))) app.innerHTML = `<div class="loading">טוען…</div>`;
     // everything for this sefer is loaded before the first page shows
     const intros = {};
-    await Promise.all([loadLex(), ...comms.map(async (c) => {
+    await Promise.all([loadLex(), fontsReady("pages"), ...comms.map(async (c) => {
       await Promise.allSettled([loadComm(c.id, slug), loadCommEn(c.id, slug)]);
       if (c.introDir && INDEX.intros && (INDEX.intros[c.id] || []).includes(slug)) { try { intros[c.id] = await fetchJSON(c.introDir + slug + ".json"); } catch {} }
     })]);
@@ -598,7 +606,7 @@
   }
   function commentaryBody(s, c, v, reg) {
     let body = "";
-    for (const cm of COMMENTARIES.filter((x) => avail(x, s) && pgOn(x))) {
+    for (const cm of pgComms(s)) {
       const list = at(resolved.get(commUrl(cm.id, s)), c, v); if (!list.length) continue;
       const enl = at(resolved.get(commEnUrl(cm.id, s)), c, v);
       body += `<h3 class="pg-cname"><span class="he">${cm.he}</span><span class="en">${esc(cm.en)}</span></h3>
@@ -951,7 +959,8 @@
     const c = navigator.connection; if (c && (c.saveData || /2g/.test(c.effectiveType || ""))) return;
     setTimeout(() => {
       if (!readerState || readerState.slug !== slug) return;
-      for (const cm of COMMENTARIES.filter((x) => avail(x, slug) && pgOn(x))) {
+      fontsReady("pages");
+      for (const cm of pgComms(slug)) {
         loadComm(cm.id, slug).catch(() => {}); if (cm.enDir) loadCommEn(cm.id, slug).catch(() => {});
         if (cm.introDir && INDEX.intros && (INDEX.intros[cm.id] || []).includes(slug)) fetchJSON(cm.introDir + slug + ".json").catch(() => {});
       }
@@ -2050,28 +2059,53 @@
     renderSettingsBody();
     body.scrollTop = keepTop;
   }
+  const modeBoxOpen = { pages: null, scroll: null };   // opened / closed by the reader while the app is open
   function renderSettingsBody() {
     const seg = (key, opts) => `<div class="seg" data-key="${key}">${opts.map(([v, l]) => `<button type="button" data-v="${v}" class="${settings[key] === v ? "on" : ""}">${l}</button>`).join("")}</div>`;
     const tog = (key, label) => `<label class="toggle"><span>${label}</span><input type="checkbox" data-key="${key}" ${settings[key] ? "checked" : ""}></label>`;
     const scroll = settings.view !== "pages";
     const sec = (en, he, body, id) => `<section class="set-sec"${id ? ` data-sec="${id}"` : ""}><h3><span class="en">${en}</span><span class="he">${he}</span></h3>${body}</section>`;
-    $("#settingsBody").innerHTML = `
-      ${sec("Display", "תצוגה", `
-        ${seg("view", [["scroll", "Scroll"], ["pages", "Pages · פסוק לעמוד"]])}
-        ${scroll ? seg("mode", [["side", "Side by side"], ["stack", "Stacked"], ["he", "עברית"], ["en", "English"]]) : ""}
-        ${seg("theme", [["paper", "Parchment"], ["white", "White"], ["dark", "Night"]])}`)}
-      ${sec("Text", "טקסט", `
-        ${tog("nikkud", "Nikkud")}
-        ${tog("taamim", "Ta'amim")}
-        ${scroll ? tog("notes", "English footnotes") : ""}
-        ${scroll ? tog("petuchot", "Parsha breaks (פ / ס)") : ""}
-        ${tog("sedarim", "Sedarim")}`)}
-      ${scroll ? "" : sec("Pages · commentaries", "עמודים · מפרשים", COMMENTARIES.map((c) => tog("pg_" + c.id, `<span class="tg2"><span class="he">${c.he}</span><small>${c.en}${c.note ? ` · ${c.note} only` : ""}</small></span>`)).join("") + tog("rashiScript", "Rashi script"), "pages")}
-      ${scroll ? sec("Rashi", "רש״י", `
+    // a box of settings for each layout: the one you're in is open, the other can be opened to set it up too
+    const box = (mode, en, he, body) => {
+      const open = modeBoxOpen[mode] != null ? modeBoxOpen[mode] : (mode === "pages") !== scroll;
+      const here = (mode === "pages") !== scroll;
+      return `<details class="mode-box" data-mode="${mode}" data-sec="${mode}"${open ? " open" : ""}>
+        <summary><span class="mb-title"><span class="en">${en}</span>${here ? `<span class="mb-here">in use</span>` : ""}</span><span class="he">${he}</span></summary>
+        <div class="mb-body">${body}</div></details>`;
+    };
+    const order = pgOrdered();
+    const pagesBox = box("pages", "Pages mode", "מצב עמודים", `
+      <section class="set-sec mb-wide"><h3><span class="en">Meforshim · show and order</span><span class="he">מפרשים</span></h3>
+        <div class="pg-list">${order.map((c, i) => `
+          <div class="pg-row" data-id="${c.id}">
+            <span class="pg-ord">
+              <button type="button" class="ord-btn" data-move="-1" aria-label="Move ${c.en} up" ${i === 0 ? "disabled" : ""}><svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="M2 6.4l3-3 3 3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+              <button type="button" class="ord-btn" data-move="1" aria-label="Move ${c.en} down" ${i === order.length - 1 ? "disabled" : ""}><svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="M2 3.6l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+            </span>
+            ${tog("pg_" + c.id, `<span class="tg2"><span class="he">${c.he}</span><small>${c.en}${c.note ? ` · ${c.note} only` : ""}</small></span>`)}
+          </div>`).join("")}</div>
+        <p class="set-note">Shown on each page in this order, top to bottom (right to left across the columns).</p></section>
+      <section class="set-sec"><h3><span class="en">Letters</span><span class="he">כתב</span></h3>${tog("rashiScript", "Rashi script for the meforshim")}</section>`);
+    const scrollBox = box("scroll", "Scroll mode", "מצב גלילה", `
+      <section class="set-sec mb-wide"><h3><span class="en">Text layout</span><span class="he">פריסה</span></h3>
+        ${seg("mode", [["side", "Side by side"], ["stack", "Stacked"], ["he", "עברית"], ["en", "English"]])}</section>
+      <section class="set-sec"><h3><span class="en">Text</span><span class="he">טקסט</span></h3>
+        ${tog("notes", "English footnotes")}
+        ${tog("petuchot", "Parsha breaks (פ / ס)")}</section>
+      <section class="set-sec"><h3><span class="en">Rashi</span><span class="he">רש״י</span></h3>
         ${tog("rashiOpen", "Always open")}
         ${tog("rashiEn", "English")}
         ${tog("rashiLines", "Line by line")}
-        ${tog("rashiScript", "Rashi script")}`) : ""}
+        ${tog("rashiScript", "Rashi script")}</section>`);
+    $("#settingsBody").innerHTML = `
+      ${sec("Display", "תצוגה", `
+        ${seg("view", [["scroll", "Scroll"], ["pages", "Pages · פסוק לעמוד"]])}
+        ${seg("theme", [["paper", "Parchment"], ["white", "White"], ["dark", "Night"]])}`)}
+      ${scroll ? scrollBox + pagesBox : pagesBox + scrollBox}
+      ${sec("Text", "טקסט", `
+        ${tog("nikkud", "Nikkud")}
+        ${tog("taamim", "Ta'amim")}
+        ${tog("sedarim", "Sedarim")}`)}
       ${sec("Torah reading", "קריאת התורה", `
         ${tog("maftir", "Maftir")}
         ${tog("weekday", "Weekday reading (Mon/Thu)")}
@@ -2079,6 +2113,18 @@
         ${settings.haftarah ? seg("haftCustom", [["a", "Ashkenazi"], ["s", "Sephardi"]]) : ""}`)}
       ${sec("Copying", "העתקה", seg("copyFmt", [["both", "Hebrew + English"], ["he", "Hebrew only"]]))}
       ${sec("Offline", "ללא חיבור", `<a class="set-link" href="#offline">Download sefarim for offline reading →</a>`)}`;
+    // remember only what the reader opens or closes (drawing the panel also fires "toggle")
+    $$("#settingsBody details.mode-box > summary").forEach((sm) => sm.addEventListener("click", () => { const d = sm.parentElement; modeBoxOpen[d.dataset.mode] = !d.open; }));
+    $$("#settingsBody .ord-btn").forEach((btn) => btn.addEventListener("click", () => {
+      const ids = pgOrdered().map((c) => c.id), id = btn.closest(".pg-row").dataset.id;
+      const i = ids.indexOf(id), j = i + +btn.dataset.move;
+      if (j < 0 || j >= ids.length) return;
+      [ids[i], ids[j]] = [ids[j], ids[i]];
+      const spot = captureSpot();
+      settings.pg_order = ids; saveSettings(); renderSettings(); afterSettingChange("pg_order", spot);
+      const again = $(`#settingsBody .pg-row[data-id="${id}"] .ord-btn[data-move="${btn.dataset.move}"]`);
+      if (again && !again.disabled) again.focus({ preventScroll: true });
+    }));
     $$("#settingsBody .seg").forEach((s) => s.addEventListener("click", (e) => {
       const b = e.target.closest("button"); if (!b || settings[s.dataset.key] === b.dataset.v) return;
       const spot = captureSpot();
@@ -2086,12 +2132,12 @@
     }));
     $$("#settingsBody input[type=checkbox]").forEach((i) => i.addEventListener("change", () => {
       const spot = captureSpot();
+      $$(`#settingsBody input[data-key="${i.dataset.key}"]`).forEach((x) => { x.checked = i.checked; });   // Rashi script is in both boxes
       settings[i.dataset.key] = i.checked; saveSettings(); afterSettingChange(i.dataset.key, spot);
       if (i.dataset.key === "haftarah") renderSettings();
     }));
   }
-  /* Scroll ⇄ Pages: load what the other layout needs first, then swap inside a view transition —
-     the screen cross-fades while the current pasuk glides between its two places */
+  /* Scroll ⇄ Pages (see morphLayout for how the change is shown) */
   let quietShow = false, layoutSwitch = null;   // the running Scroll ⇄ Pages switch (a promise)
   function switchLayout() {
     let pos = readerState.lastPos || { s: readerState.slug, c: current.c || 1, v: 1 };
@@ -2131,52 +2177,60 @@
       suppressOpen = true; return renderReader(current);
     }
   }
-  const curPasukEl = () => PG ? $("#pgTop .pg-pasuk .cu-he")
-    : readerState && readerState.lastPos ? $(`#v-${readerState.lastPos.s}-${readerState.lastPos.c}-${readerState.lastPos.v} .v-he`) : null;
+  /* the web fonts a layout uses, loaded before it is drawn: a font arriving later re-flows the text
+     (and, in Pages, the page breaks), which shows as a jump just after the switch */
+  const FONT_FACES = {
+    pages: ['400 1em "Noto Rashi Hebrew"', '600 1em "Noto Rashi Hebrew"', '500 1em "Frank Ruhl Libre"', '700 1em "Frank Ruhl Libre"', '400 1em "Noto Serif Hebrew"', '400 1em "EB Garamond"', 'italic 400 1em "EB Garamond"'],
+    scroll: ['400 1em "Noto Serif Hebrew"', '500 1em "Noto Serif Hebrew"', '400 1em "Frank Ruhl Libre"', '700 1em "Frank Ruhl Libre"', '400 1em "EB Garamond"', 'italic 400 1em "EB Garamond"', '400 1em "Noto Rashi Hebrew"'],
+  };
+  const fontsAsked = new Set();
+  function fontsReady(kind, wait = 1500) {
+    if (!document.fonts || !document.fonts.load) return Promise.resolve();
+    const jobs = FONT_FACES[kind].map((f) => { fontsAsked.add(f); return document.fonts.load(f, "אבג בְּרֵאשִׁית Ab").catch(() => {}); });
+    return Promise.race([Promise.all(jobs), new Promise((r) => setTimeout(r, wait))]);
+  }
+  /* Scroll ⇄ Pages: everything the other layout needs is loaded first (texts, commentaries, fonts), then
+     the page fades out, the layout is swapped while nothing shows, and the new one fades in. One layout
+     never shows through the other (a cross-fade of two pages of text looks like a flicker) and nothing on
+     the page is transformed (a transform would move the fixed page controls for the length of the fade). */
   async function morphLayout(update) {
     const mark = (n) => { try { performance.mark("layout-" + n); } catch {} };
     mark("start");
     const slug = readerState && readerState.slug;
+    const jobs = [fontsReady(settings.view === "pages" ? "pages" : "scroll")];
     if (slug) {   // have the data in memory, so the swap itself is instant
-      const jobs = [loadText(slug), loadLex()];
-      const comms = settings.view === "pages" ? COMMENTARIES.filter((c) => avail(c, slug) && pgOn(c)) : COMMENTARIES.filter((c) => c.id === ((readerState && readerState.tab) || "rashi") && avail(c, slug));
+      jobs.push(loadText(slug), loadLex());
+      const comms = settings.view === "pages" ? pgComms(slug) : COMMENTARIES.filter((c) => c.id === ((readerState && readerState.tab) || "rashi") && avail(c, slug));
       for (const c of comms) {
         jobs.push(loadComm(c.id, slug)); if (c.enDir) jobs.push(loadCommEn(c.id, slug));
         if (settings.view === "pages" && c.introDir && INDEX.intros && (INDEX.intros[c.id] || []).includes(slug)) jobs.push(fetchJSON(c.introDir + slug + ".json"));
       }
-      const slow = setTimeout(() => toast("Loading…"), 350);
-      await Promise.allSettled(jobs); clearTimeout(slow);
     }
+    const slow = setTimeout(() => toast("Loading…"), 350);
+    await Promise.allSettled(jobs); clearTimeout(slow);
     mark("data");
+    const app = $("#app");
     const reduce = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (!document.startViewTransition || reduce) {
-      const app = $("#app");
-      if (!reduce) { app.classList.add("vt-out"); await new Promise((r) => setTimeout(r, 130)); }
-      quietShow = true;
-      try { await update(); } finally { quietShow = false; }
-      app.classList.remove("vt-out");
-      if (!reduce) { app.classList.add("vt-in"); setTimeout(() => app.classList.remove("vt-in"), 320); }
-      return;
-    }
-    const oldEl = curPasukEl();
-    if (oldEl) oldEl.style.viewTransitionName = "cur-pasuk";
-    const bar = $(".topbar"); bar.style.viewTransitionName = "topbar";   // only these two elements change style, not the whole page
-    quietShow = true;
+    const fade = (to, ms) => new Promise((r) => {
+      if (reduce) { app.style.opacity = to ? "" : "0"; return r(); }
+      app.style.transition = `opacity ${ms}ms ${to ? "ease-out" : "ease-in"}`;
+      app.style.opacity = String(to);
+      setTimeout(r, ms + 20);
+    });
     let done; layoutSwitch = new Promise((r) => (done = r));
-    const t = document.startViewTransition(async () => {
-      mark("snapshot");
-      if (oldEl) oldEl.style.viewTransitionName = "";
+    quietShow = true;
+    try {
+      await fade(0, 110);
+      mark("hidden");
       await update();
-      const el = curPasukEl(); if (el) el.style.viewTransitionName = "cur-pasuk";
+      void app.offsetHeight;            // laid out (and scrolled into place) before it shows
       mark("updated");
-    });
-    t.ready.then(() => mark("animating"), () => {});
-    t.finished.catch(() => {}).finally(() => {
-      quietShow = false; done(); layoutSwitch = null; mark("done");
-      bar.style.viewTransitionName = "";
-      const el = curPasukEl(); if (el) el.style.viewTransitionName = "";
-    });
-    return t.updateCallbackDone.catch(() => {});
+    } finally {
+      quietShow = false;
+      await fade(1, 190);
+      app.style.transition = ""; app.style.opacity = "";
+      mark("done"); done(); layoutSwitch = null;
+    }
   }
   /* ── keeping your place when a setting changes ── */
   function captureSpot() {
@@ -2241,7 +2295,7 @@
     pagerReanchor(spot);
   }
   async function refreshPagerComms(spot) {
-    const slug = PG.slug, comms = COMMENTARIES.filter((c) => avail(c, slug) && pgOn(c));
+    const slug = PG.slug, comms = pgComms(slug);
     await Promise.allSettled(comms.flatMap((c) => [loadComm(c.id, slug), c.enDir ? loadCommEn(c.id, slug) : null,
       c.introDir && INDEX.intros && (INDEX.intros[c.id] || []).includes(slug) && !PG.intros[c.id]
         ? fetchJSON(c.introDir + slug + ".json").then((d) => { if (PG) PG.intros[c.id] = d; }) : null]));
@@ -2545,7 +2599,7 @@
     }
   }
   // for checking the phrase matching from tests (no effect on the page)
-  window.__tanachDebug = { splitPhrases, alignPhrases, alignComment, sentencesOf, extractDH, heComm, boldSeq, unB, loadLex, lexMatrix, setLexW: (w) => { LEX_W = w; } };
+  window.__tanachDebug = { fillAboveOnce: () => { const st = readerState; const t = performance.now(); let html = ''; for (let c = 1; c < st.lo; c++) html += perekHTML(st.slug, c, st.text, st.r); const t1 = performance.now(); const body = $('#seferBody'); const tpl = document.createElement('template'); tpl.innerHTML = html; const secs = [...tpl.content.children]; const box = document.createElement('div'); box.className = 'perek-batch'; box.append(tpl.content); body.prepend(box); st.lo = 1; const t2 = performance.now(); afterInsert(secs); const t3 = performance.now(); box.getBoundingClientRect(); const t4 = performance.now(); return [t1 - t, t2 - t1, t3 - t2, t4 - t3]; }, fillAbove: () => { const st = readerState; const t = performance.now(); while (st.lo > 1) addPerakim(st, 'before'); return performance.now() - t; }, fillBelow: () => { const st = readerState; const t = performance.now(); const n = book(st.slug).verses.length; while (st.hi < n) addPerakim(st, 'after'); return performance.now() - t; }, splitPhrases, alignPhrases, alignComment, sentencesOf, extractDH, heComm, boldSeq, unB, loadLex, lexMatrix, setLexW: (w) => { LEX_W = w; } };
   async function boot() {
     applySettings();
     wireChrome();

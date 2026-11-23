@@ -10,5 +10,6 @@ A static site: open `index.html` through any web server. All data is in `data/`;
 - Rashi: Hebrew via Sefaria; English — Metsudah, and Judaica Press (A. J. Rosenberg), via Sefaria
 - Ramban: Hebrew via Sefaria; English — C. B. Chavel, via Sefaria
 - Rabbeinu Bachya: Hebrew via Sefaria; English — Eliyahu Munk, 1998 (CC-BY), via Sefaria
+- Sforno: Hebrew via Sefaria (Torah; Shir Hashirim — Warsaw 1875); English — Eliyahu Munk, HaChut Hameshulash (CC-BY), via Sefaria
 - Aliyot and haftarot: @hebcal/leyning (BSD-2)
 - Sedarim: MAM-parsed (CC-BY-SA)

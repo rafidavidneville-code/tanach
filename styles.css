@@ -679,6 +679,28 @@ body.copy-mode .comment, body.copy-mode .ir-c { padding-left: 26px; }
 .tg2 small { font-size: .78rem !important; }
 .set-sec .toggle .he { font-family: var(--f-he, inherit); }
 .set-sec.flash { animation: secflash 1.2s ease; }
+/* a box of settings for each layout (Pages mode / Scroll mode) */
+.mode-box { grid-column: 1 / -1; border: 1px solid var(--rule); border-radius: 14px; margin: 8px 0 6px; background: color-mix(in srgb, var(--accent) 4%, var(--paper)); }
+.mode-box > summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 14px; }
+.mode-box > summary::-webkit-details-marker { display: none; }
+.mode-box > summary .mb-title { display: flex; align-items: center; gap: 8px; }
+.mode-box > summary .mb-title::before { content: ""; width: 7px; height: 7px; border-right: 1.6px solid var(--ink-3); border-bottom: 1.6px solid var(--ink-3); transform: rotate(-45deg); transition: transform .15s; margin-inline-end: 2px; }
+.mode-box[open] > summary .mb-title::before { transform: rotate(45deg) translate(-1px, -1px); }
+.mode-box > summary .en { font-size: .78rem; text-transform: uppercase; letter-spacing: .1em; font-weight: 700; color: var(--ink-2); }
+.mode-box > summary .he { font-size: 1.1rem; color: var(--accent); font-family: var(--f-he-display); }
+.mb-here { font-size: .68rem; letter-spacing: .04em; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 999px; padding: 1px 7px; }
+.mb-body { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 26px; padding: 0 14px 10px; border-top: 1px solid var(--rule-2); }
+.mb-body .mb-wide { grid-column: 1 / -1; }
+.pg-list { display: flex; flex-direction: column; }
+.pg-row { display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--rule-2); }
+.pg-row:last-child { border-bottom: 0; }
+.pg-row .toggle { flex: 1; min-width: 0; }
+.pg-ord { display: flex; flex-direction: column; gap: 2px; }
+.ord-btn { width: 30px; height: 22px; display: grid; place-items: center; border: 1px solid var(--rule); border-radius: 7px; background: var(--paper); color: var(--ink-2); cursor: pointer; padding: 0; }
+.ord-btn:disabled { opacity: .3; cursor: default; }
+.ord-btn:not(:disabled):active { background: var(--accent); color: var(--paper); }
+.set-note { margin: 2px 0 0; font-size: .78rem; color: var(--ink-3); }
+@media (max-width: 600px) { .mb-body { grid-template-columns: 1fr; } }
 @keyframes secflash { 0%, 40% { background: color-mix(in srgb, var(--gold) 18%, transparent); } 100% { background: transparent; } }
 @media (max-width: 600px) { #settingsBody { grid-template-columns: 1fr; } }
 .set-row { padding: 12px 0; border-bottom: 1px solid var(--rule-2); }
@@ -873,13 +895,7 @@ body.pages-mode .site-footer { display: none; }
   .brand-he { font-size: 1.3rem; }
 }
 
-/* Scroll ⇄ Pages switch: cross-fade, and the current pasuk glides between its two places */
-::view-transition-old(root), ::view-transition-new(root) { animation-duration: .22s; animation-timing-function: ease-out; }
-::view-transition-group(cur-pasuk) { animation-duration: .32s; animation-timing-function: cubic-bezier(.2, .8, .2, 1); }
-::view-transition-old(cur-pasuk), ::view-transition-new(cur-pasuk) { animation-duration: .32s; height: 100%; object-fit: contain; }
-#app.vt-out { opacity: 0; transition: opacity .13s ease; }
-#app.vt-in { animation: vtIn .32s ease; }
-@keyframes vtIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+/* Scroll ⇄ Pages switch: a fade out and in, done from app.js (morphLayout) */
 
 /* ───────── Offline page ───────── */
 .hero-link { display: inline-flex; align-items: center; gap: 6px; margin-top: 12px; padding: 6px 14px; border: 1px solid var(--rule); border-radius: 999px; color: var(--accent); text-decoration: none; font-size: .9rem; background: var(--card, transparent); }
