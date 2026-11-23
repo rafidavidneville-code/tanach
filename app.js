@@ -390,15 +390,16 @@
     }).join(" ");
   }
   function phrasedComment(heHtml, enHtml, reg, src) {
-    const H = extractDH(heComm(heHtml)), E = extractDH(enHtml || "");
+    const H = extractDH(heComm(heHtml)), E = extractDH(enHtml || "", true);
     let enRest = E.rest, enDH = E.dh;
-    if (!enDH) { const m = enRest.match(/^([^a-z]{3,}?[.:])\s+(?=\S)/); if (m && /[A-Z]{2}/.test(m[1])) { enDH = m[1]; enRest = enRest.slice(m[0].length); } }  // Chavel: DH in capitals
-    if (!H.dh && enDH) { enRest = `${enDH} ${enRest}`; enDH = ""; }
+    if (!enDH) { const m = enRest.match(/^([^a-z\uE000\uE001]{3,}?[.:])\s+(?=\S)/); if (m && /[A-Z]{2}/.test(m[1])) { enDH = m[1]; enRest = enRest.slice(m[0].length); } }  // capitals, if any are left
+    if (!H.dh && enDH) { enRest = `${B0}${enDH}${B1} ${enRest}`; enDH = ""; }
     const hp = splitPhrases(H.rest, "he");
     const rows = enRest ? alignPhrases(hp, splitPhrases(enRest, "en")) : hp.map((h) => ({ he: [h], en: [] }));
+    const ens = boldSeq(rows.map((rw) => rw.en.join(" ")));
     let html = "";
-    if (H.dh) { const i = reg.push({ en: enDH, src }) - 1; html += `<b class="ph dh" data-p="${i}">${esc(H.dh)}</b> `; }
-    for (const rw of rows) { const i = reg.push({ en: rw.en.join(" "), src }) - 1; html += `<span class="ph" data-p="${i}">${esc(rw.he.join(" "))}</span> `; }
+    if (H.dh) { const i = reg.push({ en: enDH, html: enDH ? `<b>${esc(enDH)}</b>` : "", src }) - 1; html += `<b class="ph dh" data-p="${i}">${esc(H.dh)}</b> `; }
+    rows.forEach((rw, k) => { const i = reg.push({ en: unB(rw.en.join(" ")), html: ens[k], src }) - 1; html += `<span class="ph" data-p="${i}">${esc(rw.he.join(" "))}</span> `; });
     return html;
   }
 
@@ -628,7 +629,7 @@
     const el = $(`#pgStage .ph[data-p="${i}"]`); if (el) el.classList.add("on");
     const ph = PG.phr[i];
     src.textContent = ph.src;
-    en.textContent = ph.en || "—";
+    if (ph.html) en.innerHTML = ph.html; else en.textContent = ph.en || "—";
     if (el && el.closest("#pgFlow")) { const pg = pageOf(el); if (pg !== PG.page) { PG.page = pg; pagerMove(); } }
   }
   function phraseStep(dir) {
@@ -1219,13 +1220,30 @@
 
   /* ───── Rashi line by line: each Hebrew phrase with its translation beside it ───── */
   const NO_BREAK = new Set(["r", "rav", "heb", "cf", "v", "vs", "ch", "etc", "viz", "lit", "ibid", "no", "pp", "p", "ff", "dr", "mr", "st", "comp", "ex", "esp", "ed", "trans", "vol", "fol", "loc", "op", "cit", "b", "ben", "lat", "fr", "gr", "ger", "aram", "o", "mt", "rab", "sec"]);
-  function extractDH(html) {
+  /* Bold survives the trip to plain phrase text as two private-use markers, turned back into <b> by boldSeq */
+  const B0 = "\uE000", B1 = "\uE001", RE_BMARK = /[\uE000\uE001]/g;
+  const unB = (s) => (s || "").replace(RE_BMARK, "");
+  function boldSeq(list) {            // phrase texts in reading order → HTML, bold carried across phrase breaks
+    let on = false;
+    return list.map((s) => {
+      let h = on ? "<b>" : "";
+      for (const part of (s || "").split(/([\uE000\uE001])/)) {
+        if (part === B0) { if (!on) { h += "<b>"; on = true; } }
+        else if (part === B1) { if (on) { h += "</b>"; on = false; } }
+        else h += esc(part);
+      }
+      if (on) h += "</b>";
+      return h.replace(/<b>(\s*)<\/b>/g, "$1");
+    });
+  }
+  function extractDH(html, keepBold) {
     const t = document.createElement("template"); t.innerHTML = html || "";
     t.content.querySelectorAll("sup, i.footnote, .footnote").forEach((n) => n.remove());
     t.content.querySelectorAll("br").forEach((n) => n.replaceWith(" "));  // paragraph breaks keep a space between sentences
     let dh = "";
     const first = [...t.content.childNodes].find((n) => !(n.nodeType === 3 && !n.data.trim()));
     if (first && first.nodeName === "B") { dh = norm(first.textContent); first.remove(); }
+    if (keepBold) t.content.querySelectorAll("b, strong").forEach((n) => n.replaceWith(B0 + n.textContent + B1));
     return { dh, rest: norm(t.content.textContent) };
   }
   function splitPhrases(text, lang) {
@@ -1235,11 +1253,11 @@
       if (ch === "(" || ch === "[") depth++;
       else if ((ch === ")" || ch === "]") && depth > 0) depth--;
       else if (depth === 0 && /[,.:;?!]/.test(ch)) {
-        let j = i + 1; while (j < text.length && /[\]\)"”’'״]/.test(text[j])) j++;
+        let j = i + 1; while (j < text.length && /[\]\)"”’'״\uE001]/.test(text[j])) j++;
         if (j >= text.length || !/\s/.test(text[j])) continue;
         if (lang === "en") {
           const before = text.slice(0, i);
-          if (ch === "." ) { const w = (before.match(/([^\s(\[“"]+)$/) || ["", ""])[1].toLowerCase(); if (w.length <= 1 || w.includes(".") || NO_BREAK.has(w)) continue; }
+          if (ch === "." ) { const w = unB((before.match(/([^\s(\[“"]+)$/) || ["", ""])[1]).toLowerCase(); if (w.length <= 1 || w.includes(".") || NO_BREAK.has(w)) continue; }
           if (ch === "," && /(^|\s|\[)(i\.e|e\.g)\.$/i.test(before)) continue;
         }
         out.push(text.slice(start, j).trim()); start = j;
@@ -1287,12 +1305,13 @@
     return rows;
   }
   function linesHTML(heHtml, enHtml) {
-    const H = extractDH(heComm(heHtml)), E = extractDH(enHtml);
+    const H = extractDH(heComm(heHtml)), E = extractDH(enHtml, true);
     let enRest = E.rest, enDH = E.dh;
-    if (!H.dh && enDH) { enRest = `${enDH} ${enRest}`.trim(); enDH = ""; }
+    if (!H.dh && enDH) { enRest = `${B0}${enDH}${B1} ${enRest}`.trim(); enDH = ""; }
     const rows = alignPhrases(splitPhrases(H.rest, "he"), splitPhrases(enRest, "en"));
+    const ens = boldSeq(rows.map((rw) => rw.en.join(" ")));
     return (H.dh ? `<div class="rline dh"><div class="r-en cu-en">${enDH ? `<b>${esc(enDH)}</b>` : ""}</div><div class="r-he cu-he dh-line"><b>${esc(H.dh)}</b></div></div>` : "") +
-      rows.map((rw) => `<div class="rline"><div class="r-en cu-en">${esc(rw.en.join(" "))}</div><div class="r-he cu-he">${rw.he.map(esc).join("<br>")}</div></div>`).join("");
+      rows.map((rw, k) => `<div class="rline"><div class="r-en cu-en">${ens[k]}</div><div class="r-he cu-he">${rw.he.map(esc).join("<br>")}</div></div>`).join("");
   }
 
   function commentRow(cid, s, c, v, i, he, en) {
@@ -1485,7 +1504,7 @@
         else { const t = document.createElement("template"); t.innerHTML = heComm(d.he); he = stripDH(cleanFrag(t.content)); }
         let en = u.enSel != null ? u.enSel : htmlToText(d.en);
         if (!en) { const domEn = u.el && u.el.querySelector(".cu-en"); if (domEn) en = htmlToText(domEn.innerHTML); }
-        blocks.push({ kind: "comm", s: u.s, c: u.c, v: u.v, cid: u.cid, dh, he: [he], en: [en] });
+        blocks.push({ kind: "comm", s: u.s, c: u.c, v: u.v, cid: u.cid, dh, enDH: extractDH(d.en).dh, he: [he], en: [en] });
       }
     }
     return blocks;
@@ -1515,8 +1534,9 @@
       const ref = blockRef(b);
       const he = b.he.filter(Boolean).join(" ");
       const en = both ? b.en.filter(Boolean).join(" ") : "";
+      const enH = b.enDH && en.startsWith(b.enDH) ? `<b>${esc(b.enDH)}</b>${esc(en.slice(b.enDH.length))}` : esc(en);
       html.push(`<p dir="rtl" style="direction:rtl;text-align:right;margin:0 0 4px">${ref.html} ${esc(he)}</p>` +
-        (en ? `<p dir="ltr" style="direction:ltr;text-align:left;margin:0 0 4px">${esc(en)}</p>` : ""));
+        (en ? `<p dir="ltr" style="direction:ltr;text-align:left;margin:0 0 4px">${enH}</p>` : ""));
       plain.push(`‏${ref.plain} ${he}` + (en ? `\n‎${en}` : ""));
     }
     return {
