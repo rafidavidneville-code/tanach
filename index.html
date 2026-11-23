@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tanach Reader</title>
+<meta name="description" content="The whole Tanach — Hebrew with vowels and cantillation, English, Rashi and Ramban, aliyot and haftarot.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Tanach Reader — תנ״ך">
+<meta property="og:description" content="The whole Tanach — Hebrew with vowels and cantillation, English, Rashi and Ramban, aliyot and haftarot.">
+<meta name="theme-color" content="#7b2d26">
+<meta name="apple-mobile-web-app-title" content="תנ״ך">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Frank+Ruhl+Libre:wght@400;500;700;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Hebrew:wght@400;500;600&family=Noto+Rashi+Hebrew:wght@400;600&family=Noto+Serif+Hebrew:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="#" data-home aria-label="Home">
+    <span class="brand-he">תנ״ך</span>
+    <span class="brand-en">Tanach Reader</span>
+  </a>
+  <div class="nav-center">
+    <button class="nav-picker" id="pickerBtn" type="button" aria-haspopup="dialog">
+    <span id="pickerLabel">Choose a sefer</span>
+    <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><path d="M5 7l5 6 5-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <button class="nav-aliyah" id="aliyahBtn" type="button" aria-haspopup="dialog" title="Jump to an aliyah" hidden>
+      <span id="aliyahLabel" class="he">עליה</span>
+      <svg viewBox="0 0 20 20" width="12" height="12" aria-hidden="true"><path d="M5 7l5 6 5-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <span class="top-parsha he" id="topParsha" hidden></span>
+  </div>
+  <div class="topbar-actions">
+    <button class="icon-btn layout-btn" id="layoutBtn" type="button" aria-label="Switch to Pages" title="Switch to Pages">
+      <svg class="ic-pages" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 6.5c-2-1.6-4.8-2-8-1.5v13c3.2-.5 6 0 8 1.5 2-1.5 4.8-2 8-1.5V5c-3.2-.5-6-.1-8 1.5zM12 6.5v13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+      <svg class="ic-scroll" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M5 5h14M5 9.5h14M5 14h14M5 18.5h9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+    </button>
+    <button class="icon-btn" id="copyModeBtn" type="button" aria-label="Copy mode" aria-pressed="false" title="Copy mode">
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="8.5" y="8.5" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M15.5 5.5v-1a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 4.5V14A1.5 1.5 0 0 0 6 15.5h1" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+    </button>
+    <button class="icon-btn" id="searchBtn" type="button" aria-label="Jump to a reference" title="Jump to (/)">
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M16 16l4.5 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    </button>
+    <button class="icon-btn" id="settingsBtn" type="button" aria-label="Settings" title="Settings">
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="16" cy="7" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="10" cy="17" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+    </button>
+  </div>
+</header>
+
+<div class="copybar" id="copybar" hidden>
+  <div class="copybar-inner">
+    <span class="cb-title"><span class="he">מצב העתקה</span> Copy mode</span>
+    <div class="seg" role="group" aria-label="Copy format">
+      <button type="button" data-v="both">Hebrew + English</button>
+      <button type="button" data-v="he">Hebrew only</button>
+    </div>
+    <span class="cb-preview" id="copyPreview"></span>
+    <button class="cb-copy" id="copySelBtn" type="button" disabled>Copy</button>
+    <button class="icon-btn" id="copyExit" type="button" aria-label="Exit copy mode" title="Exit copy mode">
+      <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+</div>
+
+<main id="app" tabindex="-1"></main>
+
+<footer class="site-footer">
+  <div class="footer-inner">
+    <div><span class="lbl">Hebrew</span> Miqra according to the Masorah (Sefaria, CC-BY-SA)</div>
+    <div><span class="lbl">English</span> JPS Tanakh, 1985 (Sefaria, CC-BY-NC)</div>
+    <div><span class="lbl">Commentary</span> Rashi (Sefaria)</div>
+    <div><span class="lbl">Aliyot</span> Hebcal leyning data (BSD)</div>
+    <div><span class="lbl">Rashi in English</span> Metsudah (Torah, Nevi'im Rishonim, Megillot); Judaica Press, trans. A. J. Rosenberg (rest of Nach) — via Sefaria</div>
+  </div>
+</footer>
+
+<!-- Sefer / perek picker -->
+<div class="overlay" id="pickerOverlay" hidden>
+  <div class="dialog picker" role="dialog" aria-modal="true" aria-labelledby="pickerTitle">
+    <div class="dialog-head">
+      <button class="icon-btn back" id="pickerBack" type="button" aria-label="Back" hidden>
+        <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M12 4l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <h2 id="pickerTitle">Choose a sefer</h2>
+      <button class="icon-btn" data-close type="button" aria-label="Close">✕</button>
+    </div>
+    <div class="dialog-body" id="pickerBody"></div>
+  </div>
+</div>
+
+<!-- Aliyah jump -->
+<div class="overlay" id="aliyahOverlay" hidden>
+  <div class="dialog aliyah" role="dialog" aria-modal="true" aria-labelledby="aliyahTitle">
+    <div class="dialog-head">
+      <h2 id="aliyahTitle">Aliyot <span class="he">עליות</span></h2>
+      <button class="icon-btn" data-close type="button" aria-label="Close">✕</button>
+    </div>
+    <div class="dialog-body" id="aliyahBody"></div>
+  </div>
+</div>
+
+<!-- Jump -->
+<div class="overlay" id="searchOverlay" hidden>
+  <div class="dialog search" role="dialog" aria-modal="true" aria-label="Jump to a reference">
+    <form id="searchForm" autocomplete="off">
+      <input id="searchInput" type="text" placeholder="Genesis 12:3 · Ps 23 · בראשית יב · Noach" aria-label="Reference" spellcheck="false">
+    </form>
+    <div id="searchResults" class="search-results"></div>
+    <p class="search-hint">Type a sefer and perek (and pasuk), in English or Hebrew, or the name of a parsha.</p>
+  </div>
+</div>
+
+<!-- Settings -->
+<div class="overlay" id="settingsOverlay" hidden>
+  <div class="dialog settings" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <div class="dialog-head">
+      <h2 id="settingsTitle">Settings</h2>
+      <button class="icon-btn" data-close type="button" aria-label="Close">✕</button>
+    </div>
+    <div class="dialog-body" id="settingsBody"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
