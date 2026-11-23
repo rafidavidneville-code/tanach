@@ -250,6 +250,8 @@
           <a class="hero-link" href="#offline"><svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true"><path d="M10 3v9m0 0l-3.5-3.5M10 12l3.5-3.5M4 15.5h12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg> Download for offline reading · <span class="he">הורדה</span></a>
         </section>
 
+        <section class="section" id="weekSec">${head("This week · Israel", "פרשת השבוע")}<div id="weekSlot" class="week-slot"></div></section>
+
         ${last && last.s ? `<section class="section">${head("Continue reading", "המשך קריאה")}<div id="continueSlot" class="pcards one"></div></section>` : ""}
 
         <section class="section">
@@ -280,10 +282,41 @@
             </section>`).join("")}
         </div>
       </div>`;
+    renderWeek();
     renderContinue(last);
     renderBookmarks();
     $$("[data-book]", app).forEach((b) => b.addEventListener("click", () => openPicker(b.dataset.book)));
     window.scrollTo(0, 0);
+  }
+
+  /* this week's parsha, by the Israeli calendar (data/shabbat-il.json, built with Hebcal) */
+  async function renderWeek() {
+    const slot = $("#weekSlot"); if (!slot) return;
+    let cal; try { cal = await fetchJSON("data/shabbat-il.json"); } catch { const s = $("#weekSec"); if (s) s.remove(); return; }
+    if (!slot.isConnected) return;
+    const d = new Date(), today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const i = cal.findIndex((x) => x[0] >= today); if (i < 0) { $("#weekSec").remove(); return; }
+    const [date, hdate, ids, holEn, holHe] = cal[i];
+    const civil = new Date(date + "T12:00").toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
+    const hd = hdate.replace(RE_NIKKUD, "");
+    const when = `<div class="wk-when"><span>${esc(civil)}${date === today ? " · today" : ""}</span><span class="he">שבת ${esc(hd)}</span></div>`;
+    const pshow = (ps) => {
+      const first = ps[0], last = ps[ps.length - 1], b = book(first.range[0]);
+      const rg = `${b.en} ${first.range[1]}:${first.range[2]}–${last.range[3]}:${last.range[4]}`;
+      return `<a class="wk-card" href="#parsha-${first.id}">
+          <div class="wk-name"><span class="he">פרשת ${ps.map((p) => esc(p.he)).join("־")}</span><span class="en">Parashat ${ps.map((p) => esc(p.en)).join("–")}</span></div>
+          ${when}<div class="wk-range">${esc(rg)}</div></a>
+        <div class="wk-links">${ps.length > 1 ? ps.map((p) => `<a class="chip" href="#parsha-${p.id}"><span class="he">${esc(p.he)}</span></a>`).join("") : ""}
+          ${settings.haftarah ? `<a class="chip" href="#parsha-${last.id}-haftarah">Haftarah · <span class="he">הפטרה</span></a>` : ""}</div>`;
+    };
+    if (ids) slot.innerHTML = pshow(ids.map((id) => INDEX.parshiot.find((p) => p.id === id)).filter(Boolean));
+    else {
+      const n = cal.slice(i + 1).find((x) => x[2]);
+      const np = n ? n[2].map((id) => INDEX.parshiot.find((p) => p.id === id)).filter(Boolean) : [];
+      slot.innerHTML = `<div class="wk-card wk-hol"><div class="wk-name"><span class="he">${esc(holHe ? holHe.replace(RE_NIKKUD, "") : "שבת")}</span><span class="en">${esc(holEn || "Shabbat")}</span></div>${when}
+        <div class="wk-range">A festival reading this Shabbat — no weekly parsha.</div></div>
+        ${np.length ? `<div class="wk-links"><a class="chip" href="#parsha-${np[0].id}">Next: <span class="he">פרשת ${np.map((p) => esc(p.he)).join("־")}</span> · ${esc(new Date(n[0] + "T12:00").toLocaleDateString("en-GB", { day: "numeric", month: "long" }))}</a></div>` : ""}`;
+    }
   }
 
   const iconX = `<svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`;
@@ -406,8 +439,7 @@
     let enRest = E.rest, enDH = E.dh;
     if (!enDH) { const m = enRest.match(/^([^a-z\uE000\uE001]{3,}?[.:])\s+(?=\S)/); if (m && /[A-Z]{2}/.test(m[1])) { enDH = m[1]; enRest = enRest.slice(m[0].length); } }  // capitals, if any are left
     if (!H.dh && enDH) { enRest = `${B0}${enDH}${B1} ${enRest}`; enDH = ""; }
-    const hp = splitPhrases(H.rest, "he");
-    const rows = enRest ? alignPhrases(hp, splitPhrases(enRest, "en")) : hp.map((h) => ({ he: [h], en: [] }));
+    const rows = alignComment(H.rest, enRest);
     const ens = boldSeq(rows.map((rw) => rw.en.join(" ")));
     let html = "";
     if (H.dh) { const i = reg.push({ en: enDH, html: enDH ? `<b>${esc(enDH)}</b>` : "", src }) - 1; html += `<b class="ph dh" data-p="${i}">${esc(H.dh)}</b> `; }
@@ -421,10 +453,10 @@
     if (!comms.every((c) => resolved.has(commUrl(c.id, slug)))) app.innerHTML = `<div class="loading">טוען…</div>`;
     // everything for this sefer is loaded before the first page shows
     const intros = {};
-    await Promise.all(comms.map(async (c) => {
+    await Promise.all([loadLex(), ...comms.map(async (c) => {
       await Promise.allSettled([loadComm(c.id, slug), loadCommEn(c.id, slug)]);
       if (c.introDir && INDEX.intros && (INDEX.intros[c.id] || []).includes(slug)) { try { intros[c.id] = await fetchJSON(c.introDir + slug + ".json"); } catch {} }
-    }));
+    })]);
     if (readerState === null || readerState.r !== r) return;
     document.title = `${b.en} — Tanach Reader`;
     PG = { slug, text, comms, intros, items: [], idx: 0, page: 0, pages: 1, phr: [], active: null, firstPasuk: 0 };
@@ -1361,7 +1393,37 @@
   }
   const heLen = (s) => s.replace(/\([^)]*\)/g, "").replace(RE_TAAMIM, "").replace(RE_NIKKUD, "").length;  // citations have no English counterpart
   const heWords = (s) => new Set((s.replace(RE_TAAMIM, "").replace(RE_NIKKUD, "").match(/[א-ת"״׳']{2,}/g) || []));
-  /* dynamic-programming alignment (Gale–Church style, length-based, with Hebrew-word anchors) */
+  /* ── a Hebrew→English word dictionary learned from the matched texts (scripts/build_lexicon.py) ──
+     Normalisation here must match the script. */
+  let LEX = null;
+  function loadLex() { return LEX ? Promise.resolve(LEX) : fetchJSON("data/lex.json").then((d) => (LEX = d.h)).catch(() => null); }
+  const HE_PFX = "והבכלמש";
+  const EN_STOP = new Set(("a an the and or but of to in on at by for from with as is are was were be been being it its this that these those he she they them his her " +
+    "their him i you your we us our my me not no so if then than there here which who whom whose what when where why how all any some such " +
+    "also very more most much many one two three each other into upon unto out up down over under again further only own same too can will " +
+    "shall should would could may might must do does did done have has had having thee thou thy thine ye yea hath doth unto said say says saying " +
+    "s t just even about after before because while being both either neither nor whether").split(" "));
+  const lexHeWords = (t) => unB(t).replace(RE_TAAMIM, "").replace(RE_NIKKUD, "").replace(/[״"׳']/g, "").match(/[\u05d0-\u05ea]{2,}/g) || [];
+  const lexHeFeats = (w) => { const f = [w]; if (w.length > 3 && HE_PFX.includes(w[0])) { f.push(w.slice(1)); if (w.length > 4 && HE_PFX.includes(w[1])) f.push(w.slice(2)); } return f; };
+  function lexEnStem(w) {
+    w = w.toLowerCase();
+    if (w.endsWith("’s") || w.endsWith("'s")) w = w.slice(0, -2);
+    for (const suf of ["ings", "ing", "edly", "ed", "es", "s"]) if (w.length > suf.length + 3 && w.endsWith(suf)) return w.slice(0, -suf.length);
+    return w;
+  }
+  const lexEnSet = (t) => { const o = new Set(); for (const w of unB(t).match(/[A-Za-z’']+/g) || []) if (w.length > 2 && !EN_STOP.has(w.toLowerCase())) o.add(lexEnStem(w)); return o; };
+  /* how much each Hebrew phrase's words are translated in each English phrase */
+  function lexMatrix(H, E) {
+    if (!LEX) return null;
+    const hw = H.map((h) => lexHeWords(h).map(lexHeFeats)), es = E.map(lexEnSet);
+    return H.map((_, k) => E.map((_, l) => {
+      let sum = 0;
+      for (const feats of hw[k]) { let best = 0; for (const f of feats) { const ent = LEX[f]; if (ent) for (const [e, sc] of ent) if (sc > best && es[l].has(e)) best = sc; } sum += best; }
+      return sum / 100;
+    }));
+  }
+  let LEX_W = 2;
+  /* dynamic-programming alignment (Gale–Church style: lengths, quoted Hebrew, and the word dictionary) */
   function alignPhrases(H, E) {
     const n = H.length, m = E.length;
     if (!n) return [];
@@ -1373,7 +1435,33 @@
     const hw = H.map(heWords);
     const ew = E.map((e) => unB(e).replace(RE_TAAMIM, "").replace(RE_NIKKUD, "").match(/[א-ת"״׳']{2,}/g) || []);
     const hq = H.map((h) => /\?\W*$/.test(h)), eq = E.map((e) => /\?\W*$/.test(unB(e)));
+    // Hebrew the translator quotes (two or more words running together) that occurs in only one Hebrew phrase
+    // pins that English phrase to that Hebrew phrase
+    const bare = (x) => unB(x).replace(RE_TAAMIM, "").replace(RE_NIKKUD, "").replace(/[״"׳'`]/g, "");
+    const hWords = H.map((h) => " " + bare(h).replace(/[^\u05d0-\u05ea]+/g, " ").trim() + " ");
+    const anc = E.map((e) => {
+      for (const run of bare(e).match(/[\u05d0-\u05ea]+(?:[\s\-־,.:;]+[\u05d0-\u05ea]+)+/g) || []) {
+        const w = run.replace(/[^\u05d0-\u05ea]+/g, " ").trim().split(" ");
+        for (let a = 0; a + 1 < w.length; a++) {
+          const pair = " " + w[a] + " " + w[a + 1] + " ";
+          const hits = []; hWords.forEach((h, k) => { if (h.includes(pair)) hits.push(k); });
+          if (hits.length === 1) return hits[0];
+        }
+      }
+      return -1;
+    });
     const moves = [[1, 1, 0], [1, 2, .6], [2, 1, .6], [1, 3, 1.2], [3, 1, 1.2], [2, 2, 1.2], [2, 3, 1.6], [3, 2, 1.6], [1, 4, 1.8], [4, 1, 1.8], [1, 5, 2.4], [5, 1, 2.4], [1, 0, 3]];
+    // word-dictionary support for putting Hebrew i..ni with English j..nj together (2-D prefix sums)
+    // each English phrase: what share of its dictionary matches lies in each Hebrew phrase; and each Hebrew
+    // phrase: what share of its words' matches lies in each English phrase — so every phrase counts the same
+    const S = lexMatrix(H, E), P = S ? Array.from({ length: n + 1 }, () => new Float64Array(m + 1)) : null;
+    if (S) {
+      const colT = E.map((_, l) => H.reduce((t, __, k) => t + S[k][l], 0)), rowT = S.map((r) => r.reduce((t, x) => t + x, 0));
+      for (let a = 1; a <= n; a++) for (let b = 1; b <= m; b++) {
+        const x = S[a - 1][b - 1], share = (colT[b - 1] > .15 ? x / colT[b - 1] : 0) + (rowT[a - 1] > .15 ? x / rowT[a - 1] : 0);
+        P[a][b] = share + P[a - 1][b] + P[a][b - 1] - P[a - 1][b - 1];
+      }
+    }
     const W = m + 1, INF = 1e9;
     const D = new Float64Array((n + 1) * W).fill(INF), Bi = new Int32Array((n + 1) * W), Bj = new Int32Array((n + 1) * W);
     D[0] = 0;
@@ -1393,6 +1481,8 @@
           }
           cost -= Math.min(bonus, 2.4);
           if (eq[nj - 1] && hq[ni - 1]) cost -= .5;
+          for (let l = j; l < nj; l++) if (anc[l] >= 0) cost += anc[l] >= i && anc[l] < ni ? -3 : 5;
+          if (P) cost -= LEX_W * (P[ni][nj] - P[i][nj] - P[ni][j] + P[i][j]);
         }
         const x = ni * W + nj;
         if (d0 + cost < D[x]) { D[x] = d0 + cost; Bi[x] = i; Bj[x] = j; }
@@ -1403,11 +1493,77 @@
     while (i > 0 || j > 0) { const x = i * W + j, pi = Bi[x], pj = Bj[x]; rows.unshift({ he: H.slice(pi, i), en: E.slice(pj, j) }); i = pi; j = pj; }
     return rows;
   }
+  /* A commentary's Hebrew and English are matched sentence by sentence first (sentence ends, questions,
+     references and the Hebrew words the translator quotes are strong clues), and a sentence is split further
+     only where both sides break into phrases the same way. Where that isn't certain, the whole sentence is
+     one highlight with its whole translation — a bigger highlight rather than a wrong one. */
+  function sentencesOf(text, lang) {
+    const out = []; let depth = 0, start = 0;
+    const END = lang === "he" ? /[.:?!׃]/ : /[.?!]/;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (ch === "(" || ch === "[") depth++;
+      else if ((ch === ")" || ch === "]") && depth > 0) depth--;
+      else if (depth === 0 && END.test(ch)) {
+        let j = i + 1; while (j < text.length && /[\]\)"”’'״\uE001]/.test(text[j])) j++;
+        if (j < text.length && !/\s/.test(text[j])) continue;
+        if (lang === "en" && ch === ".") { const w = unB((text.slice(0, i).match(/([^\s(\[“"]+)$/) || ["", ""])[1]).toLowerCase(); if (w.length <= 1 || w.includes(".") || NO_BREAK.has(w)) continue; }
+        if (lang === "he" && ch === "." && /(^|\s)[א-ת]$/.test(text.slice(0, i))) continue;   // an abbreviation like ר.
+        const seg = text.slice(start, j).trim(); if (seg) out.push(seg); start = j;
+      }
+    }
+    const last = text.slice(start).trim(); if (last) out.push(last);
+    return out;
+  }
+  const lenOk = (hp, ep, r, tol) => { const hL = hp.reduce((t, x) => t + heLen(x), 0), eL = ep.reduce((t, x) => t + unB(x).length, 0); return Math.abs(Math.log((eL + 6) / (r * hL + 6))) < tol; };
+  function alignComment(heText, enText) {
+    const hp = splitPhrases(heText, "he");
+    if (!enText) return hp.map((h) => ({ he: [h], en: [] }));
+    const ep = splitPhrases(enText, "en");
+    let rows = alignPhrases(hp, ep);
+    const TH = hp.reduce((t, x) => t + heLen(x), 0) || 1, TE = ep.reduce((t, x) => t + unB(x).length, 0) || 1, r = TE / TH;
+    const bare = (x) => unB(x).replace(RE_TAAMIM, "").replace(RE_NIKKUD, "").replace(/[״"׳'`]/g, "").replace(/[^\u05d0-\u05ea]+/g, " ").trim();
+    const pinned = (row) => {   // the English quotes two words running together that are in this row's Hebrew
+      const hw = " " + bare(row.he.join(" ")) + " ";
+      for (const run of row.en.map((e) => bare(e)).join(" | ").split(" | ")) { const w = run.split(" "); for (let a = 0; a + 1 < w.length; a++) if (w[a] && hw.includes(" " + w[a] + " " + w[a + 1] + " ")) return true; }
+      return false;
+    };
+    const sure = (row) => row.en.length > 0 && (pinned(row) || lenOk(row.he, row.en, r, .55));
+    // boundaries where an English clause at the edge matches the neighbouring Hebrew about as well as its own
+    // are uncertain: those two highlights become one
+    const S = lexMatrix(hp, ep);
+    if (S && rows.length > 1) {
+      let hi = 0, ei = 0; const span = rows.map((x) => { const o = { h0: hi, h1: hi + x.he.length, e0: ei, e1: ei + x.en.length }; hi = o.h1; ei = o.e1; return o; });
+      const aff = (l, sp) => { let t = 0; for (let k = sp.h0; k < sp.h1; k++) t += S[k][l]; return t; };
+      const unsure = (a, b) => {   // the boundary between rows a and b
+        const A = span[a], Bs = span[b];
+        // the two clauses on each side of the boundary: any that leans (even slightly) to the other side
+        const edge = [A.e1 - 2, A.e1 - 1, Bs.e0, Bs.e0 + 1].filter((l) => l >= A.e0 && l < Bs.e1);
+        return edge.some((l) => { const own = l < A.e1 ? aff(l, A) : aff(l, Bs), other = l < A.e1 ? aff(l, Bs) : aff(l, A); return other > .05 && other >= own * .8; });
+      };
+      const out = [rows[0]];
+      for (let k = 1; k < rows.length; k++) {
+        if (unsure(k - 1, k) && !(pinned(rows[k - 1]) && pinned(rows[k]))) { const last = out[out.length - 1]; out[out.length - 1] = { he: [...last.he, ...rows[k].he], en: [...last.en, ...rows[k].en] }; }
+        else out.push(rows[k]);
+      }
+      rows = out;
+    }
+    // merge each doubtful pair into the neighbour that suits it best, until every highlight is sure
+    let guard = 0;
+    while (rows.length > 1 && guard++ < 400) {
+      const k = rows.findIndex((x) => !sure(x)); if (k < 0) break;
+      const join = (a, b) => ({ he: [...a.he, ...b.he], en: [...a.en, ...b.en] });
+      const left = k > 0 ? join(rows[k - 1], rows[k]) : null, right = k < rows.length - 1 ? join(rows[k], rows[k + 1]) : null;
+      const score = (x) => (x ? (sure(x) ? 0 : 1) + Math.abs(Math.log((x.en.join(" ").length + 6) / (r * x.he.reduce((t, y) => t + heLen(y), 0) + 6))) : 99);
+      if (score(left) <= score(right)) rows.splice(k - 1, 2, left); else rows.splice(k, 2, right);
+    }
+    return rows;
+  }
   function linesHTML(heHtml, enHtml) {
     const H = extractDH(heComm(heHtml)), E = extractDH(enHtml, true);
     let enRest = E.rest, enDH = E.dh;
     if (!H.dh && enDH) { enRest = `${B0}${enDH}${B1} ${enRest}`.trim(); enDH = ""; }
-    const rows = alignPhrases(splitPhrases(H.rest, "he"), splitPhrases(enRest, "en"));
+    const rows = alignComment(H.rest, enRest);
     const ens = boldSeq(rows.map((rw) => rw.en.join(" ")));
     return (H.dh ? `<div class="rline dh"><div class="r-en cu-en">${enDH ? `<b>${esc(enDH)}</b>` : ""}</div><div class="r-he cu-he dh-line"><b>${esc(H.dh)}</b></div></div>` : "") +
       rows.map((rw, k) => `<div class="rline"><div class="r-en cu-en">${ens[k]}</div><div class="r-he cu-he">${rw.he.map(esc).join("<br>")}</div></div>`).join("");
@@ -1439,6 +1595,7 @@
 
   async function decorateCommentary(rows) {
     const st = readerState; if (!st) return;
+    if (settings.rashiLines && settings.rashiEn) await loadLex();   // line by line matches phrases with the word dictionary
     const cid = st.tab, meta = commMeta(cid);
     rows = rows || $$(".reader .verse");
     st.comm = st.comm || {};
@@ -1964,7 +2121,7 @@
     mark("start");
     const slug = readerState && readerState.slug;
     if (slug) {   // have the data in memory, so the swap itself is instant
-      const jobs = [loadText(slug)];
+      const jobs = [loadText(slug), loadLex()];
       const comms = settings.view === "pages" ? COMMENTARIES.filter((c) => avail(c, slug) && pgOn(c)) : COMMENTARIES.filter((c) => c.id === ((readerState && readerState.tab) || "rashi") && avail(c, slug));
       for (const c of comms) {
         jobs.push(loadComm(c.id, slug)); if (c.enDir) jobs.push(loadCommEn(c.id, slug));
@@ -2014,7 +2171,13 @@
     if (!a) return;
     if (a.pages) { if (PG && $(".pager")) pagerReanchor(a.pages); return; }
     const r = a.row && document.getElementById(a.row);
-    if (r) { const d = r.getBoundingClientRect().top - a.top; if (Math.abs(d) > .5) { selfScrollAt = Date.now(); window.scrollBy(0, d); } }
+    if (!r) return;
+    const d = r.getBoundingClientRect().top - a.top; if (Math.abs(d) > .5) { selfScrollAt = Date.now(); window.scrollBy(0, d); }
+    // if you were partway through this pasuk's Rashi and it closed, the pasuk itself could now be above the
+    // screen: bring it back to the top, so you're still on the same pasuk
+    const line = $(".topbar").getBoundingClientRect().bottom + ($("#copybar").hidden ? 0 : $("#copybar").offsetHeight);
+    const he = r.querySelector(".v-he");
+    if (he && he.getBoundingClientRect().bottom < line + 12) { selfScrollAt = Date.now(); window.scrollBy(0, Math.round(r.getBoundingClientRect().top - (line + 8))); }
   }
   const itemIdent = (it) => it && ({ type: it.type, key: it.key, parsha: it.parsha, c: it.c, v: it.v, pid: it.pid, s: it.s });
   const sameItem = (it, id) => it.type === id.type && (id.type === "intro" ? it.key === id.key
@@ -2349,7 +2512,7 @@
         $("#offCancel").addEventListener("click", () => ctl.abort());
         try {
           if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
-          await Promise.all([cacheFonts().catch(() => {}), caches.open("tanach-shell-v1").then((c) => c.addAll(["./", "index.html", "app.js", "styles.css", "data/index.json", "data/manifest.json"])).catch(() => {})]);
+          await Promise.all([cacheFonts().catch(() => {}), caches.open("tanach-shell-v2").then((c) => c.addAll(["./", "index.html", "app.js", "styles.css", "data/index.json", "data/manifest.json", "data/lex.json", "data/shabbat-il.json"])).catch(() => {})]);
           await fetchToCache(files, (n) => {
             got += n; const pct = Math.min(100, Math.round(100 * got / total));
             const pr = $("#offProg"), m = $("#offMeter"); if (pr) pr.textContent = `Downloading… ${fmtMB(got)} of ${fmtMB(total)}`; if (m) m.style.width = pct + "%";
@@ -2364,6 +2527,8 @@
       }
     }
   }
+  // for checking the phrase matching from tests (no effect on the page)
+  window.__tanachDebug = { splitPhrases, alignPhrases, alignComment, sentencesOf, extractDH, heComm, boldSeq, unB, loadLex, lexMatrix, setLexW: (w) => { LEX_W = w; } };
   async function boot() {
     applySettings();
     wireChrome();

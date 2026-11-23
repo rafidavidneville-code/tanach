@@ -927,3 +927,18 @@ body.pages-mode .site-footer { display: none; }
 .off-meter { flex: 1.2; height: 6px; border-radius: 999px; background: var(--rule); overflow: hidden; }
 .off-meter i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
 @media (max-width: 560px) { .off-books { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); } .off-bar-in { gap: 10px; } .off-sum { font-size: .84rem; } }
+
+/* this week's parsha */
+.week-slot { display: flex; flex-direction: column; gap: 8px; }
+.wk-card { display: grid; grid-template-columns: 1fr auto; gap: 4px 16px; align-items: baseline; padding: 14px 18px; border: 1px solid color-mix(in srgb, var(--gold) 45%, var(--rule)); border-radius: 14px; text-decoration: none; color: inherit;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--gold) 12%, var(--card, var(--paper))), var(--card, var(--paper))); box-shadow: 0 1px 2px rgba(60, 40, 10, .06); transition: border-color .15s, box-shadow .15s; }
+a.wk-card:hover { border-color: var(--gold); box-shadow: 0 2px 8px rgba(60, 40, 10, .1); }
+.wk-name { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.wk-name .he { order: 2; font-family: var(--f-he-display, var(--f-he)); font-weight: 700; font-size: 1.6rem; color: var(--accent); }
+.wk-name .en { order: 1; font-family: var(--f-en); font-size: 1.15rem; }
+.wk-when { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 12px; color: var(--ink-2); font-size: .9rem; flex-wrap: wrap; }
+.wk-when .he { font-size: 1rem; }
+.wk-range { grid-column: 1 / -1; color: var(--ink-3); font-size: .82rem; }
+.wk-links { display: flex; flex-wrap: wrap; gap: 8px; }
+.wk-links .chip { border: 1px solid var(--rule); background: var(--card, var(--paper)); color: var(--ink-2); border-radius: 999px; padding: 5px 12px; font-size: .86rem; text-decoration: none; }
+.wk-links .chip:hover { border-color: var(--accent); color: var(--accent); }

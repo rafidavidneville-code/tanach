@@ -3,8 +3,8 @@
    arrive; from the saved copy when offline or when the network is very slow.
    Downloaded texts and commentaries (data/…): from the offline copy first.
    Fonts: kept once fetched. */
-const SHELL = "tanach-shell-v1", DATA = "tanach-data", FONTS = "tanach-fonts";
-const SHELL_FILES = ["./", "index.html", "app.js", "styles.css", "favicon.svg", "apple-touch-icon.png", "icon-192.png", "icon-512.png", "manifest.webmanifest", "data/index.json", "data/manifest.json"];
+const SHELL = "tanach-shell-v2", DATA = "tanach-data", FONTS = "tanach-fonts";
+const SHELL_FILES = ["./", "index.html", "app.js", "styles.css", "favicon.svg", "apple-touch-icon.png", "icon-192.png", "icon-512.png", "manifest.webmanifest", "data/index.json", "data/manifest.json", "data/lex.json", "data/shabbat-il.json"];
 const BASE = new URL("./", self.location).pathname;
 
 self.addEventListener("install", (e) => {
@@ -27,7 +27,7 @@ self.addEventListener("fetch", (e) => {
     if (!url.pathname.startsWith(BASE)) return;
     if (url.searchParams.has("dl")) return;                 // a download in progress: straight to the network
     const rel = url.pathname.slice(BASE.length);
-    if (/^data\/.+\.json$/.test(rel) && rel !== "data/index.json" && rel !== "data/manifest.json") { e.respondWith(fromData(req)); return; }
+    if (/^data\/.+\.json$/.test(rel) && !SHELL_FILES.includes(rel)) { e.respondWith(fromData(req)); return; }
     if (req.mode === "navigate" || SHELL_FILES.includes(rel)) e.respondWith(fromShell(req, rel));
     return;
   }
