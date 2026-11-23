@@ -13,12 +13,16 @@
   const COMMENTARIES = [
     { id: "rashi", he: "רש״י", en: "Rashi", dir: "data/rashi/", enDir: "data/rashi-en/" },
     { id: "ramban", he: "רמב״ן", en: "Ramban", dir: "data/ramban/", enDir: "data/ramban-en/", introDir: "data/ramban-intro/", enSrc: "Chavel" },
+    { id: "bachya", he: "רבנו בחיי", heIntro: "הקדמת רבנו בחיי", en: "Rabbeinu Bachya", dir: "data/bachya/", enDir: "data/bachya-en/", introDir: "data/bachya-intro/", enSrc: "Munk", note: "Torah" },
   ];
+  const introName = (c) => c.heIntro || `הקדמת ה${c.he}`;
+  /* Pages layout: each commentary can be switched on or off */
+  const pgOn = (c) => settings["pg_" + c.id] !== false;
   const commMeta = (id) => COMMENTARIES.find((c) => c.id === id);
   /* which commentaries exist for a sefer, and which ones the current layout shows */
   const avail = (c, slug) => (INDEX && INDEX.comm && INDEX.comm[c.id] ? INDEX.comm[c.id].includes(slug) : c.id === "rashi");
   const activeComms = (slug) => settings.view === "pages"
-    ? COMMENTARIES.filter((c) => avail(c, slug))
+    ? COMMENTARIES.filter((c) => avail(c, slug) && pgOn(c))
     : COMMENTARIES.filter((c) => c.id === ((readerState && readerState.tab) || "rashi") && avail(c, slug));
 
   /* ───────── Storage (safe) ───────── */
@@ -31,6 +35,7 @@
     mode: "side", nikkud: true, taamim: true, scale: 1, theme: "paper",
     rashiScript: true, rashiEn: true, rashiOpen: false, rashiLines: false, notes: true, copyFmt: "both",
     maftir: true, weekday: false, haftarah: true, haftCustom: "a", petuchot: true, sedarim: true, view: "scroll",
+    pg_rashi: true, pg_ramban: true, pg_bachya: true,
   };
   const settings = Object.assign({}, DEFAULTS, store.get("settings", {}));
   if (settings.inlineRashi) settings.rashiOpen = true;
@@ -173,6 +178,7 @@
   function parseRoute(hash) {
     const s = decodeURIComponent((hash || "").replace(/^#/, "")).toLowerCase();
     if (!s || s === "home") return { view: "home" };
+    if (s === "offline") return { view: "offline" };
     let m = s.match(/^parsha-([a-z-]+?)(?:-(\d+)-(\d+)|-(haftarah))?$/);
     if (m) {
       const p = INDEX.parshiot.find((x) => x.id === m[1]);
@@ -215,6 +221,7 @@
     readerState = null;
     $("#aliyahBtn").hidden = true; $("#topParsha").hidden = true; document.body.classList.remove("has-parsha");
     if (r.view === "home") renderHome();
+    else if (r.view === "offline") renderOffline();
     else if (r.view === "chapter" || r.view === "parsha") await renderReader(r);
     else renderNotFound();
   }
@@ -236,6 +243,7 @@
           <h1>תנ״ך</h1>
           <p class="sub">Torah<span class="dot">·</span>Nevi'im<span class="dot">·</span>Ketuvim</p>
           <p class="intro">The whole Tanach — Hebrew with vowels and cantillation, next to the English and Rashi. Start anywhere below.</p>
+          <a class="hero-link" href="#offline"><svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true"><path d="M10 3v9m0 0l-3.5-3.5M10 12l3.5-3.5M4 15.5h12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg> Download for offline reading · <span class="he">הורדה</span></a>
         </section>
 
         ${last && last.s ? `<section class="section">${head("Continue reading", "המשך קריאה")}<div id="continueSlot" class="pcards one"></div></section>` : ""}
@@ -336,6 +344,7 @@
 
   /* ───────── Reader ───────── */
   const iconBookmark = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6.5 3.5h11v17l-5.5-4-5.5 4z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>`;
+  const iconBooks = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4.5 4.5h4v15h-4zM10 4.5h4v15h-4z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M15.6 5.6l3.8-1 3.1 14.6-3.8 1z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>`;
   const iconCopy = `<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="8.5" y="8.5" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M15.5 5.5v-1a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 4.5V14A1.5 1.5 0 0 0 6 15.5h1" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>`;
 
   function segmentsFor(r) {
@@ -405,7 +414,7 @@
 
   async function renderPages(r, text) {
     const app = $("#app"), slug = r.slug, b = book(slug);
-    const comms = COMMENTARIES.filter((c) => avail(c, slug));
+    const comms = COMMENTARIES.filter((c) => avail(c, slug) && pgOn(c));
     if (!comms.every((c) => resolved.has(commUrl(c.id, slug)))) app.innerHTML = `<div class="loading">טוען…</div>`;
     // everything for this sefer is loaded before the first page shows
     const intros = {};
@@ -492,7 +501,7 @@
     if (it.type === "intro") {
       const c = commMeta(it.cid);
       return {
-        top: `<h2 class="pg-title"><span class="en">${esc(c.en)} · Introduction to ${esc(b.en)}</span><span class="he">הקדמת ה${esc(c.he)} ל${esc(b.he)}</span></h2>`,
+        top: `<h2 class="pg-title"><span class="en">${esc(c.en)} · Introduction to ${esc(b.en)}</span><span class="he">${esc(introName(c))} ל${esc(b.he)}</span></h2>`,
         body: it.secs.map((s) => `${it.secs.length > 1 ? `<h3 class="pg-cname"><span class="he">${esc(s.he)}</span><span class="en">${esc(s.en)}</span></h3>` : ""}
           ${s.he_p.map((p, i) => `<p class="pg-para">${phrasedComment(p, s.en_p[i] || "", reg, `${c.en} · ${esc(s.en)}`)}</p>`).join("")}`).join(""),
       };
@@ -520,11 +529,11 @@
     return { top, body: commentaryBody(s, c, v, reg) };
   }
   function pgTools(s, c, v) {
-    return `<span class="pg-tools"><button type="button" class="pg-bm ${isBookmarked(s, c, v) ? "on" : ""}" data-s="${s}" data-c="${c}" data-v="${v}" aria-label="Bookmark" title="Bookmark">${iconBookmark}</button><button type="button" class="pg-copy" aria-label="Copy this pasuk" title="Copy this pasuk">${iconCopy}</button></span>`;
+    return `<span class="pg-tools"><button type="button" class="pg-mf" aria-label="Choose commentaries" title="Choose commentaries">${iconBooks}</button><button type="button" class="pg-bm ${isBookmarked(s, c, v) ? "on" : ""}" data-s="${s}" data-c="${c}" data-v="${v}" aria-label="Bookmark" title="Bookmark">${iconBookmark}</button><button type="button" class="pg-copy" aria-label="Copy this pasuk" title="Copy this pasuk">${iconCopy}</button></span>`;
   }
   function commentaryBody(s, c, v, reg) {
     let body = "";
-    for (const cm of COMMENTARIES.filter((x) => avail(x, s))) {
+    for (const cm of COMMENTARIES.filter((x) => avail(x, s) && pgOn(x))) {
       const list = at(resolved.get(commUrl(cm.id, s)), c, v); if (!list.length) continue;
       const enl = at(resolved.get(commEnUrl(cm.id, s)), c, v);
       body += `<h3 class="pg-cname"><span class="he">${cm.he}</span><span class="en">${esc(cm.en)}</span></h3>
@@ -559,7 +568,7 @@
     flow.style.transform = `translateX(${PG.page * (PG.W + PG_GAP)}px)`;
     if (!animate) { void flow.offsetWidth; flow.style.transition = ""; }
     const it = PG.items[PG.idx], b = book(PG.slug);
-    $("#pgWhere").textContent = it.type === "intro" ? `הקדמת ה${commMeta(it.cid).he}`
+    $("#pgWhere").textContent = it.type === "intro" ? introName(commMeta(it.cid))
       : it.type === "haft" ? `הפטרה · ${book(it.s).he} ${plainGem(it.c)}:${plainGem(it.v)}`
       : `${b.he} ${plainGem(it.c)}:${plainGem(it.v)}`;
     $("#pgCount").textContent = PG.pages > 1 ? `${PG.page + 1} / ${PG.pages}` : "";
@@ -574,7 +583,7 @@
     $("#pgTop").innerHTML = top;
     flow.innerHTML = body + `<span class="pg-end"></span>`;
     stage.classList.remove("from-left", "from-right"); void stage.offsetWidth;
-    stage.classList.add(dir >= 0 ? "from-left" : "from-right");
+    if (!quietShow) stage.classList.add(dir >= 0 ? "from-left" : "from-right");
     PG.page = 0; pagerLayout(false);
     PG.page = page === "last" ? PG.pages - 1 : Math.min(page || 0, PG.pages - 1);
     pagerMove(false);
@@ -650,6 +659,7 @@
     $$(".pg-step", pager).forEach((b) => b.addEventListener("click", () => phraseStep(+b.dataset.step)));
     $("#pgStage").addEventListener("click", (e) => {
       if (PG.swiped) return;
+      if (e.target.closest(".pg-mf")) { openSettings("pages"); return; }
       const bm = e.target.closest(".pg-bm");
       if (bm) { toggleBookmark(bm.dataset.s, +bm.dataset.c, +bm.dataset.v, bm); return; }
       const cp = e.target.closest(".pg-copy");
@@ -743,7 +753,12 @@
     if (!resolved.has(textUrl(slug))) app.innerHTML = `<div class="loading">טוען…</div>`;
     let text;
     try { text = await loadText(slug); }
-    catch (e) { app.innerHTML = `<div class="error-box"><p>Couldn't load ${esc(b.en)}.</p><p><a href="">Try again</a></p></div>`; return; }
+    catch (e) {
+      app.innerHTML = navigator.onLine === false
+        ? `<div class="error-box"><p>${esc(b.he)} · ${esc(b.en)} isn't downloaded, and there's no internet connection.</p><p><a href="#offline">Download sefarim for offline reading</a></p></div>`
+        : `<div class="error-box"><p>Couldn't load ${esc(b.en)}.</p><p><a href="">Try again</a></p></div>`;
+      return;
+    }
     if (current !== r) return;
     readerState = { r, slug, text, sel: null, open: pendingOpen || new Set(), tab: store.get("tab", "rashi"), haftChoice: pendingHaftChoice || {}, rowsDirty: true };
     pendingHaftChoice = null; pendingOpen = null;
@@ -930,7 +945,8 @@
     const rows = st.rows; if (!rows.length) return null;
     const top = $(".topbar").getBoundingClientRect().bottom + ($("#copybar").hidden ? 0 : $("#copybar").offsetHeight) + 8;
     let lo = 0, hi = rows.length - 1, ans = rows.length - 1;
-    while (lo <= hi) { const mid = (lo + hi) >> 1; if (rows[mid].getBoundingClientRect().bottom > top) { ans = mid; hi = mid - 1; } else lo = mid + 1; }
+    // the first row with a real part of it below the bar (a sliver of the previous one doesn't count)
+    while (lo <= hi) { const mid = (lo + hi) >> 1; if (rows[mid].getBoundingClientRect().bottom > top + 14) { ans = mid; hi = mid - 1; } else lo = mid + 1; }
     return rows[ans];
   }
   function trackPosition(force) {
@@ -1774,7 +1790,7 @@
   function renderSettings() {
     const seg = (key, opts) => `<div class="seg" data-key="${key}">${opts.map(([v, l]) => `<button type="button" data-v="${v}" class="${settings[key] === v ? "on" : ""}">${l}</button>`).join("")}</div>`;
     const tog = (key, label) => `<label class="toggle"><span>${label}</span><input type="checkbox" data-key="${key}" ${settings[key] ? "checked" : ""}></label>`;
-    const sec = (en, he, body) => `<section class="set-sec"><h3><span class="en">${en}</span><span class="he">${he}</span></h3>${body}</section>`;
+    const sec = (en, he, body, id) => `<section class="set-sec"${id ? ` data-sec="${id}"` : ""}><h3><span class="en">${en}</span><span class="he">${he}</span></h3>${body}</section>`;
     $("#settingsBody").innerHTML = `
       ${sec("Display", "תצוגה", `
         ${seg("view", [["scroll", "Scroll"], ["pages", "Pages · פסוק לעמוד"]])}
@@ -1787,6 +1803,7 @@
         ${tog("notes", "English footnotes")}
         ${tog("petuchot", "Parsha breaks (פ / ס)")}
         ${tog("sedarim", "Sedarim")}`)}
+      ${sec("Pages · commentaries", "עמודים · מפרשים", COMMENTARIES.map((c) => tog("pg_" + c.id, `${c.en}${c.note ? ` <small>(${c.note})</small>` : ""} · <span class="he">${c.he}</span>`)).join(""), "pages")}
       ${sec("Rashi", "רש״י", `
         ${tog("rashiOpen", "Always open")}
         ${tog("rashiEn", "English")}
@@ -1797,7 +1814,8 @@
         ${tog("weekday", "Weekday reading (Mon/Thu)")}
         ${tog("haftarah", "Haftarah")}
         ${settings.haftarah ? seg("haftCustom", [["a", "Ashkenazi"], ["s", "Sephardi"]]) : ""}`)}
-      ${sec("Copying", "העתקה", seg("copyFmt", [["both", "Hebrew + English"], ["he", "Hebrew only"]]))}`;
+      ${sec("Copying", "העתקה", seg("copyFmt", [["both", "Hebrew + English"], ["he", "Hebrew only"]]))}
+      ${sec("Offline", "ללא חיבור", `<a class="set-link" href="#offline">Download sefarim for offline reading →</a>`)}`;
     $$("#settingsBody .seg").forEach((s) => s.addEventListener("click", (e) => {
       const b = e.target.closest("button"); if (!b) return;
       settings[s.dataset.key] = b.dataset.v; saveSettings(); renderSettings(); afterSettingChange(s.dataset.key);
@@ -1809,29 +1827,78 @@
     const rng = $("#settingsBody input[type=range]");
     rng.addEventListener("input", () => { settings.scale = +rng.value; saveSettings(); });
   }
-  function afterSettingChange(key) {
-    if (key === "view") {
-      if (readerState && current && current.view !== "home") {
-        const pos = readerState.lastPos || { s: readerState.slug, c: current.c || 1, v: 1 };
-        const slug = readerState.slug;
-        closeAllDialogs();
-        if (settings.view === "pages") {
-          // Scroll → Pages: open on the pasuk at the top of the screen (or its haftarah page)
-          const it = pos.haft ? null : { c: pos.c, v: pos.v };
-          current = pos.haft && pos.pid ? { view: "chapter", slug, c: pos.c, v: null, pgHaft: pos.pid } : { view: "chapter", slug, c: it.c, v: it.v };
-          suppressOpen = true; renderReader(current);
-        } else {
-          // Pages → Scroll: put the same pasuk at the top of the screen, with nothing highlighted or opened
-          const it = PG && PG.items[PG.idx];
-          if (it && it.type === "haft") { location.hash = `#parsha-${it.pid}-haftarah`; return; }
-          const c = it && it.type === "pasuk" ? it.c : 1, v = it && it.type === "pasuk" ? it.v : 1;
-          const top = $(".topbar").getBoundingClientRect().bottom + ($("#copybar").hidden ? 0 : $("#copybar").offsetHeight) + 10;
-          pendingAnchor = it && it.type === "pasuk" ? { s: slug, c, v, top } : null;
-          current = { view: "chapter", slug, c, v: null };
-          history.replaceState(null, "", chapterHash(slug, c, it && it.type === "pasuk" ? v : null));
-          suppressOpen = true; renderReader(current);
-        }
+  /* Scroll ⇄ Pages: load what the other layout needs first, then swap inside a view transition —
+     the screen cross-fades while the current pasuk glides between its two places */
+  let quietShow = false;
+  function switchLayout() {
+    const pos = readerState.lastPos || { s: readerState.slug, c: current.c || 1, v: 1 };
+    const slug = readerState.slug;
+    closeAllDialogs();
+    if (settings.view === "pages") {
+      // Scroll → Pages: open on the pasuk at the top of the screen (or its haftarah page)
+      const it = pos.haft ? null : { c: pos.c, v: pos.v };
+      current = pos.haft && pos.pid ? { view: "chapter", slug, c: pos.c, v: null, pgHaft: pos.pid } : { view: "chapter", slug, c: it.c, v: it.v };
+      suppressOpen = true; return renderReader(current);
+    } else {
+      // Pages → Scroll: put the same pasuk at the top of the screen, with nothing highlighted or opened
+      const it = PG && PG.items[PG.idx];
+      if (it && it.type === "haft") { location.hash = `#parsha-${it.pid}-haftarah`; return; }
+      const c = it && it.type === "pasuk" ? it.c : 1, v = it && it.type === "pasuk" ? it.v : 1;
+      const top = $(".topbar").getBoundingClientRect().bottom + ($("#copybar").hidden ? 0 : $("#copybar").offsetHeight) + 10;
+      pendingAnchor = it && it.type === "pasuk" ? { s: slug, c, v, top } : null;
+      current = { view: "chapter", slug, c, v: null };
+      history.replaceState(null, "", chapterHash(slug, c, it && it.type === "pasuk" ? v : null));
+      suppressOpen = true; return renderReader(current);
+    }
+  }
+  const curPasukEl = () => PG ? $("#pgTop .pg-pasuk .cu-he")
+    : readerState && readerState.lastPos && !readerState.lastPos.haft ? $(`#v-${readerState.lastPos.s}-${readerState.lastPos.c}-${readerState.lastPos.v} .v-he`) : null;
+  async function morphLayout(update) {
+    const slug = readerState && readerState.slug;
+    if (slug) {   // have the data in memory, so the swap itself is instant
+      const jobs = [loadText(slug)];
+      const comms = settings.view === "pages" ? COMMENTARIES.filter((c) => avail(c, slug) && pgOn(c)) : COMMENTARIES.filter((c) => c.id === ((readerState && readerState.tab) || "rashi") && avail(c, slug));
+      for (const c of comms) {
+        jobs.push(loadComm(c.id, slug)); if (c.enDir) jobs.push(loadCommEn(c.id, slug));
+        if (settings.view === "pages" && c.introDir && INDEX.intros && (INDEX.intros[c.id] || []).includes(slug)) jobs.push(fetchJSON(c.introDir + slug + ".json"));
       }
+      const slow = setTimeout(() => toast("Loading…"), 350);
+      await Promise.allSettled(jobs); clearTimeout(slow);
+    }
+    const reduce = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (!document.startViewTransition || reduce) {
+      const app = $("#app");
+      if (!reduce) { app.classList.add("vt-out"); await new Promise((r) => setTimeout(r, 130)); }
+      quietShow = true;
+      try { await update(); } finally { quietShow = false; }
+      app.classList.remove("vt-out");
+      if (!reduce) { app.classList.add("vt-in"); setTimeout(() => app.classList.remove("vt-in"), 320); }
+      return;
+    }
+    const oldEl = curPasukEl();
+    if (oldEl) oldEl.style.viewTransitionName = "cur-pasuk";
+    document.documentElement.classList.add("vt-layout");
+    quietShow = true;
+    const t = document.startViewTransition(async () => {
+      if (oldEl) oldEl.style.viewTransitionName = "";
+      await update();
+      const el = curPasukEl(); if (el) el.style.viewTransitionName = "cur-pasuk";
+    });
+    t.finished.catch(() => {}).finally(() => {
+      quietShow = false;
+      document.documentElement.classList.remove("vt-layout");
+      const el = curPasukEl(); if (el) el.style.viewTransitionName = "";
+    });
+    return t.updateCallbackDone.catch(() => {});
+  }
+  function openSettings(section) {
+    renderSettings(); openDialog("#settingsOverlay");
+    if (section) { const el = $(`#settingsBody [data-sec="${section}"]`); if (el) { el.scrollIntoView({ block: "start" }); el.classList.add("flash"); setTimeout(() => el.classList.remove("flash"), 1200); } }
+  }
+  function afterSettingChange(key) {
+    if (key.startsWith("pg_")) { if (PG && readerState) rerenderKeepingPlace(); return; }
+    if (key === "view") {
+      if (readerState && current && current.view !== "home") morphLayout(switchLayout);
       return;
     }
     if (key === "copyFmt") { updateCopyBar(); return; }
@@ -1853,7 +1920,7 @@
     });
     $("#pickerBack").addEventListener("click", showBooks);
     $("#searchBtn").addEventListener("click", () => { openDialog("#searchOverlay"); $("#searchInput").value = ""; renderSearch(); setTimeout(() => $("#searchInput").focus(), 30); });
-    $("#settingsBtn").addEventListener("click", () => { renderSettings(); openDialog("#settingsOverlay"); });
+    $("#settingsBtn").addEventListener("click", () => openSettings());
     $("#copyModeBtn").addEventListener("click", () => setCopyMode(!copyMode));
     $("#layoutBtn").addEventListener("click", () => {
       settings.view = settings.view === "pages" ? "scroll" : "pages"; saveSettings();
@@ -1896,6 +1963,219 @@
   }
 
   /* ───────── Boot ───────── */
+
+  /* ───────── Offline: a service worker keeps the site, and whatever you download, on this device ─────────
+     Downloads live in the "tanach-data" cache; data/manifest.json gives each file's size and fingerprint,
+     so changed files are noticed and fetched again. Inside Claude (a sandboxed frame) service workers are
+     refused, so the page explains where offline reading works. */
+  const SITE_URL = "https://rafidavidneville-code.github.io/tanach/";
+  const DATA_CACHE = "tanach-data", FONT_CACHE = "tanach-fonts";
+  const OFF = { ok: false, why: "", man: null, have: null, busy: null, init: null };
+  async function initOffline() {
+    if (!("serviceWorker" in navigator) || !("caches" in window)) { OFF.why = "unsupported"; return; }
+    try { await navigator.serviceWorker.register("sw.js"); OFF.ok = true; }
+    catch { OFF.why = "blocked"; return; }
+    setTimeout(() => syncDownloads().catch(() => {}), 5000);
+  }
+  const absUrl = (p) => new URL(p, location.href).href;
+  async function loadManifest(fresh) {
+    if (OFF.man && !fresh) return OFF.man;
+    const r = await fetch("data/manifest.json", { cache: fresh ? "no-cache" : "default" });
+    if (!r.ok) throw new Error("manifest");
+    return (OFF.man = await r.json());
+  }
+  /* path → fingerprint of every file in the offline copy */
+  async function downloadedFiles() {
+    const cache = await caches.open(DATA_CACHE), have = new Map();
+    const base = absUrl("./");
+    for (const req of await cache.keys()) {
+      const res = await cache.match(req);
+      have.set(req.url.replace(base, "").split("?")[0], res ? res.headers.get("x-hash") || "" : "");
+    }
+    return (OFF.have = have);
+  }
+  /* what can be downloaded for a sefer */
+  const DL_KINDS = () => [
+    { id: "text", en: "Tanach text", sub: "Hebrew + English", he: "מקרא", files: (s) => [`data/text/${s}.json`] },
+    ...COMMENTARIES.map((c) => ({ id: c.id, en: c.en, sub: c.note ? `with English · ${c.note} only` : "with English", he: c.he,
+      files: (s) => avail(c, s) ? [c.dir + s + ".json", c.enDir && c.enDir + s + ".json", c.introDir && INDEX.intros && (INDEX.intros[c.id] || []).includes(s) && c.introDir + s + ".json"].filter(Boolean) : [] })),
+  ];
+  const filesFor = (slugs, kinds) => {
+    const man = OFF.man ? OFF.man.files : {}, out = new Set();
+    for (const s of slugs) for (const k of DL_KINDS()) if (kinds.has(k.id)) for (const f of k.files(s)) if (man[f]) out.add(f);
+    return [...out];
+  };
+  const sizeOf = (files) => files.reduce((t, f) => t + ((OFF.man && OFF.man.files[f]) ? OFF.man.files[f][0] : 0), 0);
+  const fmtMB = (b) => b >= 1e9 ? (b / 1e9).toFixed(1) + " GB" : b >= 1e6 ? (b / 1e6).toFixed(b >= 1e7 ? 0 : 1) + " MB" : Math.max(1, Math.round(b / 1e3)) + " KB";
+  const fileState = (f) => { const h = OFF.have && OFF.have.get(f); return h == null ? "missing" : h === OFF.man.files[f][1] ? "ok" : "old"; };
+
+  async function fetchToCache(files, onStep, signal) {
+    const cache = await caches.open(DATA_CACHE), queue = [...files];
+    const worker = async () => {
+      while (queue.length) {
+        if (signal && signal.aborted) throw new DOMException("cancelled", "AbortError");
+        const f = queue.shift(), [size, hash] = OFF.man.files[f];
+        const res = await fetch(`${f}?dl=${hash}`, { cache: "no-cache", signal });
+        if (!res.ok) throw new Error(f);
+        const body = await res.blob();
+        await cache.put(absUrl(f), new Response(body, { headers: { "content-type": "application/json", "x-hash": hash } }));
+        OFF.have && OFF.have.set(f, hash);
+        onStep && onStep(size);
+      }
+    };
+    await Promise.all([worker(), worker(), worker(), worker()]);
+  }
+  /* the fonts, so the text looks the same offline */
+  async function cacheFonts() {
+    const link = $('link[href^="https://fonts.googleapis.com/css2"]'); if (!link) return;
+    const cache = await caches.open(FONT_CACHE);
+    const r = await fetch(link.href, { mode: "cors" }); if (!r.ok) return;
+    const css = await r.clone().text();
+    await cache.put(link.href, r);
+    const urls = [...new Set([...css.matchAll(/url\((https:\/\/fonts\.gstatic\.com[^)]+)\)/g)].map((m) => m[1]))];
+    const missing = [];
+    for (const u of urls) if (!(await cache.match(u))) missing.push(u);
+    await Promise.all(missing.map((u) => fetch(u, { mode: "cors" }).then((x) => x.ok && cache.put(u, x)).catch(() => {})));
+  }
+  /* when online, quietly refresh downloaded files that have changed */
+  async function syncDownloads() {
+    if (!OFF.ok || !navigator.onLine) return;
+    const have = await downloadedFiles(); if (!have.size) return;
+    const man = await loadManifest(true);
+    const old = [...have].filter(([f, h]) => man.files[f] && man.files[f][1] !== h).map(([f]) => f);
+    if (old.length) { await fetchToCache(old); if (current && current.view === "offline") renderOffline(); }
+  }
+
+  function renderOffline() {
+    leavePages();
+    document.title = "Read offline — Tanach Reader";
+    setPicker(null);
+    const app = $("#app");
+    const head = (en, he) => `<div class="section-head"><h2>${esc(en)}</h2><span class="he">${esc(he)}</span></div>`;
+    const intro = `<section class="hero off-hero"><h1 class="off-h1">קריאה ללא חיבור</h1><p class="sub">Read offline</p>
+      <p class="intro">Choose what to keep on this device. Once it's downloaded, those sefarim open without an internet connection.</p></section>`;
+    if (OFF.init && !OFF.ok && !OFF.why) {   // still starting up
+      app.innerHTML = `<div class="home offline">${intro}<div class="loading">טוען…</div></div>`;
+      OFF.init.finally(() => { if (current && current.view === "offline") renderOffline(); });
+      return;
+    }
+    if (!OFF.ok) {
+      app.innerHTML = `<div class="home offline">${intro}<div class="off-note">${OFF.why === "blocked"
+        ? `Offline downloads work on the website itself, not inside Claude. Open <a href="${SITE_URL}#offline" target="_blank" rel="noopener">${SITE_URL.replace("https://", "")}</a> and download from there.`
+        : `This browser can't keep the site offline. Try a current version of Safari, Chrome, Edge or Firefox.`}</div></div>`;
+      window.scrollTo(0, 0); return;
+    }
+    app.innerHTML = `<div class="home offline">${intro}<div class="loading">טוען…</div></div>`;
+    Promise.all([loadManifest(), downloadedFiles()]).then(() => { if (current && current.view === "offline") drawOffline(); })
+      .catch(() => { $(".offline .loading").outerHTML = `<div class="off-note">Couldn't reach the list of files. Connect to the internet and try again.</div>`; });
+    window.scrollTo(0, 0);
+
+    function drawOffline() {
+      const sel = new Set(store.get("dlSel", ORDER));
+      const kinds = new Set(store.get("dlKinds", DL_KINDS().map((k) => k.id)));
+      const save = () => { store.set("dlSel", [...sel]); store.set("dlKinds", [...kinds]); };
+      const tileState = (s) => {
+        const fs = filesFor([s], kinds); if (!fs.length) return "";
+        const st = fs.map(fileState);
+        return st.every((x) => x === "ok") ? "ok" : st.includes("old") ? "old" : st.some((x) => x === "ok") ? "part" : "";
+      };
+      const badge = { ok: "✓", old: "↻", part: "◐", "": "" };
+      const groups = INDEX.sections.map((sec) => `
+        <div class="off-sec">
+          <div class="off-sec-head"><label class="off-check"><input type="checkbox" data-secsel="${sec.id}"><span class="he">${esc(sec.he)}</span><span class="en">${esc(sec.en)}</span></label></div>
+          <div class="off-books">${sec.groups.flatMap((g) => g.books).map((s) => {
+            const st = tileState(s), size = sizeOf(filesFor([s], kinds));
+            return `<label class="off-book ${st ? "st-" + st : ""}" title="${esc(book(s).en)}"><input type="checkbox" data-s="${s}" ${sel.has(s) ? "checked" : ""}>
+              <span class="he">${esc(book(s).he)}</span><span class="en">${esc(book(s).en)}</span><span class="sz">${fmtMB(size)}</span><span class="bd" aria-label="${st}">${badge[st]}</span></label>`;
+          }).join("")}</div>
+        </div>`).join("");
+      const kindRows = DL_KINDS().map((k) => {
+        const size = sizeOf(filesFor(ORDER, new Set([k.id])));
+        return `<label class="toggle off-kind"><span><b>${esc(k.en)}</b> <span class="he">${esc(k.he)}</span><small>${esc(k.sub)} · ${fmtMB(size)} in all</small></span><input type="checkbox" data-kind="${k.id}" ${kinds.has(k.id) ? "checked" : ""} ${k.id === "text" ? "disabled checked" : ""}></label>`;
+      }).join("");
+      const haveAll = [...OFF.have.keys()].filter((f) => OFF.man.files[f]);
+      const haveSize = sizeOf(haveAll);
+      app.innerHTML = `<div class="home offline">${intro}
+        <section class="section">${head("What to include", "מה להוריד")}<div class="off-kinds">${kindRows}</div></section>
+        <section class="section">${head("Which sefarim", "אילו ספרים")}
+          <div class="off-quick">
+            <button type="button" class="chip" data-quick="all">Everything · הכל</button>
+            ${INDEX.sections.map((sec) => `<button type="button" class="chip" data-quick="${sec.id}">${esc(sec.en)} · ${esc(sec.he)}</button>`).join("")}
+            <button type="button" class="chip" data-quick="none">Clear</button>
+          </div>
+          ${groups}
+          <p class="off-legend">✓ downloaded · ◐ partly · ↻ an update is waiting</p>
+          ${kinds.size && [...sel].some((s) => book(s).section === "torah") && settings.haftarah ? `<p class="off-tip">Haftarot come from Nevi'im — include those sefarim to read the haftarah offline too.</p>` : ""}
+        </section>
+        <section class="section">${head("On this device", "במכשיר זה")}
+          <p class="off-have" id="offHave">${haveAll.length ? `${fmtMB(haveSize)} downloaded` : "Nothing downloaded yet."} <span id="offQuota"></span></p>
+          <div class="off-actions">
+            <button type="button" class="chip" id="offRemoveSel" ${haveAll.length ? "" : "disabled"}>Remove selected</button>
+            <button type="button" class="chip" id="offRemoveAll" ${haveAll.length ? "" : "disabled"}>Remove everything</button>
+          </div>
+          <p class="off-tip">On an iPhone or iPad, add the site to your Home Screen (Share → Add to Home Screen) and open it from there — Safari can clear the saved copy of websites you haven't opened for a while.</p>
+        </section>
+        <div class="off-bar" id="offBar"></div>
+      </div>`;
+      const todo = () => filesFor([...sel], kinds).filter((f) => fileState(f) !== "ok");
+      const drawBar = () => {
+        const t = todo(), size = sizeOf(t), bar = $("#offBar");
+        if (OFF.busy) return;
+        bar.innerHTML = `<div class="off-bar-in"><span class="off-sum">${sel.size} ${sel.size === 1 ? "sefer" : "sefarim"} selected · ${t.length ? `${fmtMB(size)} to download` : "all downloaded"}</span>
+          <button type="button" class="off-go" id="offGo" ${t.length ? "" : "disabled"}>${t.some((f) => fileState(f) === "old") && t.every((f) => fileState(f) !== "missing") ? "Update" : "Download"}</button></div>`;
+        $("#offGo").addEventListener("click", startDownload);
+      };
+      const syncSecBoxes = () => INDEX.sections.forEach((sec) => {
+        const bs = sec.groups.flatMap((g) => g.books), n = bs.filter((s) => sel.has(s)).length, box = $(`[data-secsel="${sec.id}"]`);
+        box.checked = n === bs.length; box.indeterminate = n > 0 && n < bs.length;
+      });
+      syncSecBoxes(); drawBar();
+      $$("[data-s]", app).forEach((i) => i.addEventListener("change", () => { i.checked ? sel.add(i.dataset.s) : sel.delete(i.dataset.s); save(); syncSecBoxes(); drawBar(); }));
+      $$("[data-secsel]", app).forEach((i) => i.addEventListener("change", () => {
+        INDEX.sections.find((x) => x.id === i.dataset.secsel).groups.flatMap((g) => g.books).forEach((s) => i.checked ? sel.add(s) : sel.delete(s));
+        save(); drawOffline();
+      }));
+      $$("[data-kind]", app).forEach((i) => i.addEventListener("change", () => { i.checked ? kinds.add(i.dataset.kind) : kinds.delete(i.dataset.kind); kinds.add("text"); save(); drawOffline(); }));
+      $$("[data-quick]", app).forEach((b) => b.addEventListener("click", () => {
+        const q = b.dataset.quick; sel.clear();
+        if (q === "all") ORDER.forEach((s) => sel.add(s));
+        else if (q !== "none") INDEX.sections.find((x) => x.id === q).groups.flatMap((g) => g.books).forEach((s) => sel.add(s));
+        save(); drawOffline();
+      }));
+      $("#offRemoveSel").addEventListener("click", async () => {
+        const fs = filesFor([...sel], kinds).filter((f) => OFF.have.has(f)); if (!fs.length) { toast("Nothing selected is downloaded"); return; }
+        const cache = await caches.open(DATA_CACHE); await Promise.all(fs.map((f) => cache.delete(absUrl(f))));
+        await downloadedFiles(); toast(`Removed ${fmtMB(sizeOf(fs))}`); drawOffline();
+      });
+      $("#offRemoveAll").addEventListener("click", async () => {
+        await caches.delete(DATA_CACHE); await downloadedFiles(); toast("Removed all downloads"); drawOffline();
+      });
+      if (navigator.storage && navigator.storage.estimate) navigator.storage.estimate().then((e) => { const q = $("#offQuota"); if (q && e.quota) q.textContent = `· this site may use up to ${fmtMB(e.quota)}`; }).catch(() => {});
+
+      async function startDownload() {
+        const files = todo(); if (!files.length) return;
+        const total = sizeOf(files); let got = 0;
+        const ctl = new AbortController(); OFF.busy = ctl;
+        const bar = $("#offBar");
+        bar.innerHTML = `<div class="off-bar-in"><span class="off-sum" id="offProg">Downloading… 0 of ${fmtMB(total)}</span><div class="off-meter"><i id="offMeter"></i></div><button type="button" class="off-go ghost" id="offCancel">Cancel</button></div>`;
+        $("#offCancel").addEventListener("click", () => ctl.abort());
+        try {
+          if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+          await Promise.all([cacheFonts().catch(() => {}), caches.open("tanach-shell-v1").then((c) => c.addAll(["./", "index.html", "app.js", "styles.css", "data/index.json", "data/manifest.json"])).catch(() => {})]);
+          await fetchToCache(files, (n) => {
+            got += n; const pct = Math.min(100, Math.round(100 * got / total));
+            const pr = $("#offProg"), m = $("#offMeter"); if (pr) pr.textContent = `Downloading… ${fmtMB(got)} of ${fmtMB(total)}`; if (m) m.style.width = pct + "%";
+          }, ctl.signal);
+          OFF.busy = null; toast(`Downloaded ${fmtMB(total)} — ready offline`);
+        } catch (e) {
+          OFF.busy = null;
+          toast(e && e.name === "AbortError" ? "Download stopped — what finished is kept" : navigator.onLine ? "Download failed — try again" : "You're offline — connect and try again");
+        }
+        await downloadedFiles();
+        if (current && current.view === "offline") drawOffline();
+      }
+    }
+  }
   async function boot() {
     applySettings();
     wireChrome();
@@ -1905,6 +2185,7 @@
     ORDER = INDEX.sections.flatMap((s) => s.groups.flatMap((g) => g.books));
     buildMarks();
     buildSedarim();
+    OFF.init = initOffline();
     route();
   }
   boot();
