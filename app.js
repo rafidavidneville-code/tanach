@@ -15,6 +15,8 @@
     { id: "ramban", he: "רמב״ן", en: "Ramban", dir: "data/ramban/", enDir: "data/ramban-en/", introDir: "data/ramban-intro/", enSrc: "Chavel" },
     { id: "bachya", he: "רבנו בחיי", heIntro: "הקדמת רבנו בחיי", en: "Rabbeinu Bachya", dir: "data/bachya/", enDir: "data/bachya-en/", introDir: "data/bachya-intro/", enSrc: "Munk", note: "Torah" },
     { id: "sforno", he: "ספורנו", heIntro: "הקדמת הספורנו", en: "Sforno", dir: "data/sforno/", enDir: "data/sforno-en/", introDir: "data/sforno-intro/", enSrc: "Munk", note: "Torah and Shir Hashirim" },
+    { id: "kliyakar", he: "כלי יקר", heIntro: "הקדמת כלי יקר", en: "Kli Yakar", dir: "data/kliyakar/", enDir: "data/kliyakar-en/", introDir: "data/kliyakar-intro/", note: "Torah" },
+    { id: "beishalevi", he: "בית הלוי", heIntro: "הקדמת בית הלוי", en: "Beit HaLevi", dir: "data/beishalevi/", enDir: "data/beishalevi-en/", introDir: "data/beishalevi-intro/", note: "Bereshit and Shemot" },
   ];
   const introName = (c) => c.heIntro || `הקדמת ה${c.he}`;
   /* Pages layout: each commentary can be switched on or off */
@@ -43,7 +45,7 @@
     mode: "side", nikkud: true, taamim: true, theme: "paper",
     rashiScript: true, rashiEn: true, rashiOpen: false, rashiLines: false, notes: true, copyFmt: "both",
     maftir: true, weekday: false, haftarah: true, haftCustom: "a", petuchot: true, sedarim: true, view: "scroll",
-    pg_rashi: true, pg_ramban: true, pg_bachya: true, pg_sforno: true, pg_order: ["rashi", "ramban", "bachya", "sforno"],
+    pg_rashi: true, pg_ramban: true, pg_bachya: true, pg_sforno: true, pg_kliyakar: true, pg_beishalevi: true, pg_order: ["rashi", "ramban", "bachya", "sforno", "kliyakar", "beishalevi"],
   };
   const settings = Object.assign({}, DEFAULTS, store.get("settings", {}));
   if (settings.inlineRashi) settings.rashiOpen = true;

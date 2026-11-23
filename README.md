@@ -11,5 +11,7 @@ A static site: open `index.html` through any web server. All data is in `data/`;
 - Ramban: Hebrew via Sefaria; English — C. B. Chavel, via Sefaria
 - Rabbeinu Bachya: Hebrew via Sefaria; English — Eliyahu Munk, 1998 (CC-BY), via Sefaria
 - Sforno: Hebrew via Sefaria (Torah; Shir Hashirim — Warsaw 1875); English — Eliyahu Munk, HaChut Hameshulash (CC-BY), via Sefaria
+- Kli Yakar: Hebrew — On Your Way (public domain), via Sefaria; English, in part — Sefaria Community Translation (CC0), Metsudah Yalkut / Sifsei Chachomim Chumash (CC-BY), Rabbi Mike Feuer, Jerusalem Anthology (CC-BY)
+- Beit HaLevi al HaTorah: Hebrew — Warsaw 1884, via Sefaria; placed on pesukim with Sefaria's links
 - Aliyot and haftarot: @hebcal/leyning (BSD-2)
 - Sedarim: MAM-parsed (CC-BY-SA)
