@@ -1972,9 +1972,23 @@
   };
   const HE_ALIASES = { "שמואל א": "i-samuel", "שמואל ב": "ii-samuel", "מלכים א": "i-kings", "מלכים ב": "ii-kings", "דברי הימים א": "i-chronicles", "דברי הימים ב": "ii-chronicles", "תהלים": "psalms", "קהלת": "ecclesiastes", "שיר השירים": "song-of-songs" };
 
+  const BOOK_KEYS = {};
+  function bookKeys(s) {
+    if (BOOK_KEYS[s]) return BOOK_KEYS[s];
+    const out = [];
+    for (const name of [book(s).en, book(s).enOld].filter(Boolean)) {
+      const w = name.toLowerCase().replace(/[^a-z ]/g, "").split(/\s+/).filter(Boolean);
+      const num = { i: "1", ii: "2" };
+      const last = w[w.length - 1], first = w[0];
+      if (num[last]) { const base = w.slice(0, -1).join(""); out.push(base + last, base + num[last], last + base, num[last] + base); }
+      else if (num[first]) { const base = w.slice(1).join(""); out.push(first + base, num[first] + base, base + first, base + num[first]); }
+      else out.push(w.join(""));
+    }
+    return (BOOK_KEYS[s] = out);
+  }
   function normEnBook(s) {
     s = s.toLowerCase().replace(/\./g, "").replace(/\s+/g, " ").trim();
-    s = s.replace(/^(1|i|first)\s*/, "i ").replace(/^(2|ii|second)\s*/, "ii ");
+    s = s.replace(/^(2|ii|second)\s*(?=[a-z])/, "ii ").replace(/^(?:(?:1|i|first)\s+|1)(?=[a-z])/, "i ");
     return s.replace(/ /g, "-");
   }
   function findBooks(q) {
@@ -1990,8 +2004,11 @@
     const m = n.match(/^(i|ii)-(.*)$/);
     if (m && ABBR[m[2]] == null) for (const s of ORDER) if (s.startsWith(m[1] + "-") && s.slice(m[1].length + 1).startsWith(m[2])) out.push(s);
     for (const s of ORDER) if (s.startsWith(n) && !out.includes(s)) out.push(s);
+    // the site's names (Bereshit, Shmuel I, Divrei Hayamim II) and the older English (Genesis, I Samuel)
+    const k = q.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (k.length >= 3) for (const s of ORDER) if (!out.includes(s) && bookKeys(s).some((f) => f.startsWith(k))) out.push(s);
     if (!out.length && n.length >= 3) for (const s of ORDER) if (s.includes(n)) out.push(s);
-    return out;
+    return [...new Set(out)];
   }
   function searchQuery(raw) {
     const q = raw.trim(); if (!q) return [];
