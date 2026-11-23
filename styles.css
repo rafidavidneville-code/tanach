@@ -21,9 +21,10 @@
   --f-en: "EB Garamond", Georgia, serif;
   --f-ui: "IBM Plex Sans", "IBM Plex Sans Hebrew", system-ui, sans-serif;
 
-  --he-size: 1.55rem;
-  --en-size: 1.12rem;
-  --rashi-size: 1.02rem;
+  /* one standard size, fitted to the screen: a little smaller on phones so more of each line fits */
+  --he-size: clamp(1.38rem, 1.2rem + .7vw, 1.55rem);
+  --en-size: clamp(1.02rem, .96rem + .3vw, 1.12rem);
+  --rashi-size: clamp(.96rem, .92rem + .25vw, 1.02rem);
   --topbar-h: 56px;
   --bar-h: 0px;
   --panel-w: 410px;
@@ -500,7 +501,6 @@ body.copy-mode .comment, body.copy-mode .ir-c { padding-left: 26px; }
   .mode-he .verse { grid-template-columns: minmax(0, 1fr) 2.2rem; grid-template-areas: "he num"; }
   .mode-en .verse { grid-template-columns: 2.2rem minmax(0, 1fr); grid-template-areas: "num en"; }
   .v-en { padding-top: 6px; color: var(--ink-2); }
-  :root { --he-size: 1.42rem; }
   .rashi-pill { flex-direction: column; gap: 0; padding: 2px 3px; border-radius: 8px; }
   .rashi-pill .he { font-size: .6rem; }
   .rrow, .mode-stack .rrow { grid-template-columns: minmax(0, 1fr) 2.2rem; grid-template-areas: "he gap" "en gap"; column-gap: 8px; row-gap: 6px; }
@@ -848,10 +848,9 @@ body.pages-mode .site-footer { display: none; }
 }
 
 /* Scroll ⇄ Pages switch: cross-fade, and the current pasuk glides between its two places */
-html.vt-layout .topbar { view-transition-name: topbar; }
-::view-transition-old(root), ::view-transition-new(root) { animation-duration: .32s; animation-timing-function: ease; }
-::view-transition-group(cur-pasuk) { animation-duration: .45s; animation-timing-function: cubic-bezier(.2, .75, .2, 1); }
-::view-transition-old(cur-pasuk), ::view-transition-new(cur-pasuk) { animation-duration: .45s; height: 100%; object-fit: contain; }
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: .22s; animation-timing-function: ease-out; }
+::view-transition-group(cur-pasuk) { animation-duration: .32s; animation-timing-function: cubic-bezier(.2, .8, .2, 1); }
+::view-transition-old(cur-pasuk), ::view-transition-new(cur-pasuk) { animation-duration: .32s; height: 100%; object-fit: contain; }
 #app.vt-out { opacity: 0; transition: opacity .13s ease; }
 #app.vt-in { animation: vtIn .32s ease; }
 @keyframes vtIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }

@@ -32,14 +32,14 @@
   };
 
   const DEFAULTS = {
-    mode: "side", nikkud: true, taamim: true, scale: 1, theme: "paper",
+    mode: "side", nikkud: true, taamim: true, theme: "paper",
     rashiScript: true, rashiEn: true, rashiOpen: false, rashiLines: false, notes: true, copyFmt: "both",
     maftir: true, weekday: false, haftarah: true, haftCustom: "a", petuchot: true, sedarim: true, view: "scroll",
     pg_rashi: true, pg_ramban: true, pg_bachya: true,
   };
   const settings = Object.assign({}, DEFAULTS, store.get("settings", {}));
   if (settings.inlineRashi) settings.rashiOpen = true;
-  delete settings.inlineRashi; delete settings.panel;
+  delete settings.inlineRashi; delete settings.panel; delete settings.scale;   // text size is now fixed to the standard
   let bookmarks = store.get("bookmarks", []);
   let copyMode = false;
 
@@ -160,9 +160,7 @@
   function applySettings() {
     const root = document.documentElement;
     if (settings.theme === "paper") delete root.dataset.theme; else root.dataset.theme = settings.theme;
-    root.style.setProperty("--he-size", (1.55 * settings.scale).toFixed(3) + "rem");
-    root.style.setProperty("--en-size", (1.12 * Math.sqrt(settings.scale)).toFixed(3) + "rem");
-    root.style.setProperty("--rashi-size", (1.02 * Math.sqrt(settings.scale)).toFixed(3) + "rem");
+    ["--he-size", "--en-size", "--rashi-size"].forEach((k) => root.style.removeProperty(k));   // sizes come from the stylesheet
     document.body.classList.toggle("rashi-plain", !settings.rashiScript);
     document.body.classList.toggle("hide-notes", !settings.notes);
     document.body.classList.toggle("rashi-lines", !!settings.rashiLines);
@@ -206,7 +204,13 @@
         current = { view: "chapter", slug: p.range[0], c: p.range[3], v: null, pgHaft: p.id };
         closeAllDialogs(); renderReader(current); return;
       }
-      location.replace(chapterHash(p.range[0], p.range[1], p.range[2])); return;
+      if (PG && PG.slug === p.range[0] && $(".pager")) {
+        const i = PG.items.findIndex((it) => it.type === "intro" && it.parsha === p.id);
+        if (i >= 0) { pagerShow(i, 0); return; }
+        pagerGoTo(p.range[1], p.range[2]); return;
+      }
+      current = { view: "chapter", slug: p.range[0], c: p.range[1], v: p.range[2], pgParsha: p.id };
+      suppressOpen = true; renderReader(current); return;
     }
     if (r.view === "chapter" && PG && readerState && readerState.slug === r.slug && $(".pager")) {
       current = Object.assign(current || {}, { c: r.c, v: r.v });
@@ -428,8 +432,18 @@
     buildPagerItems();
     const items = PG.items;
     let idx;
-    if (r.pgHaft) idx = items.findIndex((it) => it.type === "haft" && it.pid === r.pgHaft);
-    else if (r.pgIntro != null) idx = r.pgIntro;
+    if (r.pgHaft) {
+      const at = r.pgHaftAt;
+      idx = at ? items.findIndex((it) => it.type === "haft" && it.pid === r.pgHaft && it.s === at.s && it.c === at.c && it.v === at.v) : -1;
+      if (idx < 0) idx = items.findIndex((it) => it.type === "haft" && it.pid === r.pgHaft);
+    } else if (r.pgParsha) {
+      idx = items.findIndex((it) => it.type === "intro" && it.parsha === r.pgParsha);
+      if (idx < 0) idx = items.findIndex((it) => it.type === "pasuk" && it.c === r.c && it.v === r.v);
+    } else if (r.pgIntro) {
+      idx = items.findIndex((it) => it.type === "intro" && it.cid === r.pgIntro.cid && it.key === r.pgIntro.key);
+      if (idx < 0 && r.pgIntro.parsha) idx = items.findIndex((it) => (it.type === "intro" && it.parsha === r.pgIntro.parsha) || (it.type === "pasuk" && it.c === r.c && it.v === r.v));
+      if (idx < 0) idx = 0;
+    }
     else if (r.v) idx = items.findIndex((it) => it.type === "pasuk" && it.c === r.c && it.v === r.v);
     else if (r.c === 1) idx = 0;
     else idx = items.findIndex((it) => it.type === "pasuk" && it.c === r.c);
@@ -462,12 +476,23 @@
   /* the sequence of pages for a sefer: introductions, every pasuk, and each parsha's haftarah after its last pasuk */
   function buildPagerItems() {
     const b = book(PG.slug), items = [];
-    for (const c of PG.comms) if (PG.intros[c.id]) items.push({ type: "intro", cid: c.id, secs: PG.intros[c.id] });
+    const pIntro = new Map();   // "c:v" of a parsha's first pasuk → its introduction pages
+    for (const c of PG.comms) {
+      const secs = PG.intros[c.id] || [];
+      const sefer = secs.filter((x) => !x.parsha);
+      if (sefer.length) items.push({ type: "intro", cid: c.id, secs: sefer, key: "sefer" });
+      for (const x of secs.filter((y) => y.parsha)) {
+        const k = `${x.c}:${x.v}`;
+        if (!pIntro.has(k)) pIntro.set(k, []);
+        pIntro.get(k).push({ type: "intro", cid: c.id, secs: [x], key: x.key, parsha: x.parsha });
+      }
+    }
     PG.firstPasuk = items.length;
     const ends = new Map();
     if (settings.haftarah && b.section === "torah") for (const p of INDEX.parshiot) if (p.range[0] === PG.slug) ends.set(`${p.range[3]}:${p.range[4]}`, p);
     b.verses.forEach((n, ci) => {
       for (let v = 1; v <= n; v++) {
+        const pi = pIntro.get(`${ci + 1}:${v}`); if (pi) items.push(...pi);
         items.push({ type: "pasuk", c: ci + 1, v });
         const p = ends.get(`${ci + 1}:${v}`);
         if (p) haftRanges(p).forEach(([s, c1, v1, c2, v2], k) => {
@@ -499,9 +524,10 @@
     const reg = PG.phr = [];
     const b = book(PG.slug);
     if (it.type === "intro") {
-      const c = commMeta(it.cid);
+      const c = commMeta(it.cid), pp = it.parsha && INDEX.parshiot.find((x) => x.id === it.parsha);
       return {
-        top: `<h2 class="pg-title"><span class="en">${esc(c.en)} · Introduction to ${esc(b.en)}</span><span class="he">${esc(introName(c))} ל${esc(b.he)}</span></h2>`,
+        top: pp ? `<h2 class="pg-title"><span class="en">${esc(c.en)} · Introduction to Parashat ${esc(pp.en)}</span><span class="he">${esc(introName(c))} לפרשת ${esc(pp.he)}</span></h2>`
+          : `<h2 class="pg-title"><span class="en">${esc(c.en)} · Introduction to ${esc(b.en)}</span><span class="he">${esc(introName(c))} ל${esc(b.he)}</span></h2>`,
         body: it.secs.map((s) => `${it.secs.length > 1 ? `<h3 class="pg-cname"><span class="he">${esc(s.he)}</span><span class="en">${esc(s.en)}</span></h3>` : ""}
           ${s.he_p.map((p, i) => `<p class="pg-para">${phrasedComment(p, s.en_p[i] || "", reg, `${c.en} · ${esc(s.en)}`)}</p>`).join("")}`).join(""),
       };
@@ -568,7 +594,7 @@
     flow.style.transform = `translateX(${PG.page * (PG.W + PG_GAP)}px)`;
     if (!animate) { void flow.offsetWidth; flow.style.transition = ""; }
     const it = PG.items[PG.idx], b = book(PG.slug);
-    $("#pgWhere").textContent = it.type === "intro" ? introName(commMeta(it.cid))
+    $("#pgWhere").textContent = it.type === "intro" ? introName(commMeta(it.cid)) + (it.parsha ? ` · פרשת ${(INDEX.parshiot.find((x) => x.id === it.parsha) || {}).he || ""}` : "")
       : it.type === "haft" ? `הפטרה · ${book(it.s).he} ${plainGem(it.c)}:${plainGem(it.v)}`
       : `${b.he} ${plainGem(it.c)}:${plainGem(it.v)}`;
     $("#pgCount").textContent = PG.pages > 1 ? `${PG.page + 1} / ${PG.pages}` : "";
@@ -593,8 +619,12 @@
     let pos;
     if (it.type === "haft") {
       const p = INDEX.parshiot.find((x) => x.id === it.pid);
-      pos = { s: PG.slug, c: p.range[3], v: p.range[4], haft: true, pid: it.pid };
+      pos = { s: PG.slug, c: p.range[3], v: p.range[4], haft: true, pid: it.pid, at: { s: it.s, c: it.c, v: it.v } };
       history.replaceState(null, "", `#parsha-${it.pid}-haftarah`);
+    } else if (it.type === "intro" && it.parsha) {
+      const p = INDEX.parshiot.find((x) => x.id === it.parsha);
+      pos = { s: PG.slug, c: p.range[1], v: p.range[2] };
+      history.replaceState(null, "", `#parsha-${p.id}`);
     } else {
       pos = it.type === "pasuk" ? { s: PG.slug, c: it.c, v: it.v } : { s: PG.slug, c: 1, v: 1 };
       history.replaceState(null, "", it.type === "pasuk" ? chapterHash(PG.slug, it.c, it.v) : chapterHash(PG.slug, 1));
@@ -855,6 +885,10 @@
     await decorateCommentary();            // loads Rashi once for the sefer, paints these perakim
     if (readerState !== st) return;
     afterInsert($$(".perek", body), false);
+    if (pendingHaftOpen) {
+      const el = $(`#haft-${pendingHaftOpen}`); pendingHaftOpen = null;
+      if (el) { el.classList.add("full"); el.classList.remove("card"); await fillHaftarah(el, true); if (readerState !== st) return; st.rowsDirty = true; }
+    }
     preloadForCopy();
     const target = r.v ? $(`#v-${slug}-${r.c}-${r.v}`) : null;
     if (pendingAnchor) restoreAnchor();
@@ -863,6 +897,18 @@
     else window.scrollTo(0, 0);
     trackPosition(true);
     fillSefer(st, c0);
+    preloadPagesData(slug);
+  }
+  /* while reading in Scroll, quietly fetch what Pages needs for this sefer, so switching never waits */
+  function preloadPagesData(slug) {
+    const c = navigator.connection; if (c && (c.saveData || /2g/.test(c.effectiveType || ""))) return;
+    setTimeout(() => {
+      if (!readerState || readerState.slug !== slug) return;
+      for (const cm of COMMENTARIES.filter((x) => avail(x, slug) && pgOn(x))) {
+        loadComm(cm.id, slug).catch(() => {}); if (cm.enDir) loadCommEn(cm.id, slug).catch(() => {});
+        if (cm.introDir && INDEX.intros && (INDEX.intros[cm.id] || []).includes(slug)) fetchJSON(cm.introDir + slug + ".json").catch(() => {});
+      }
+    }, 2500);
   }
   function afterInsert(sections, paintRashi = true) {
     const st = readerState; if (!st) return;
@@ -887,13 +933,13 @@
     const b = book(st.slug), n = b.verses.length;
     let html = "", count = 0, added = 0;
     if (where === "after") {
-      while (st.hi < n && (added === 0 || count < 80)) { st.hi++; html += perekHTML(st.slug, st.hi, st.text, st.r); count += b.verses[st.hi - 1]; added++; }
+      while (st.hi < n && (added === 0 || count < 40)) { st.hi++; html += perekHTML(st.slug, st.hi, st.text, st.r); count += b.verses[st.hi - 1]; added++; }
       const tpl = document.createElement("template"); tpl.innerHTML = html;
       const secs = [...tpl.content.children]; body.append(tpl.content); afterInsert(secs);
       return;
     }
     const cs = [];
-    while (st.lo > 1 && (cs.length === 0 || count < 80)) { st.lo--; cs.unshift(st.lo); count += b.verses[st.lo - 1]; }
+    while (st.lo > 1 && (cs.length === 0 || count < 40)) { st.lo--; cs.unshift(st.lo); count += b.verses[st.lo - 1]; }
     for (const c of cs) html += perekHTML(st.slug, c, st.text, st.r);
     // before: keep whatever the reader is looking at exactly where it is
     const anchor = topRow(); const before = anchor ? anchor.getBoundingClientRect().top : 0;
@@ -911,9 +957,10 @@
       if (wantAfter) addPerakim(st, "after");
       else if (canPrepend) addPerakim(st, "before");
       else if (st.lo <= 1 && st.hi >= n) return;     // whole sefer is in
-      setTimeout(step, 20);
+      later(step);
     };
-    setTimeout(step, 60);
+    const later = (f) => window.requestIdleCallback ? requestIdleCallback(f, { timeout: 250 }) : setTimeout(f, 20);
+    (layoutSwitch || Promise.resolve()).then(() => setTimeout(() => later(step), layoutSwitch ? 200 : 60));
   }
   /* render every perek between what's shown and c (used when jumping within the sefer) */
   function ensurePerek(c) {
@@ -967,7 +1014,7 @@
     }
   }
   /* after a re-render (settings change), put the same pasuk back at the same height on screen */
-  let pendingAnchor = null, pendingOpen = null;
+  let pendingAnchor = null, pendingOpen = null, pendingHaftOpen = null;
   function restoreAnchor() {
     const a = pendingAnchor; pendingAnchor = null;
     const row = a && $(`#v-${a.s}-${a.c}-${a.v}`);
@@ -1072,7 +1119,14 @@
     const row = pos && $(`#v-${pos.s}-${pos.c}-${pos.v}`);
     pendingAnchor = row ? { s: pos.s, c: pos.c, v: pos.v, top: row.getBoundingClientRect().top } : null;
     pendingHaftChoice = st.haftChoice; pendingOpen = new Set(st.open);
-    if (PG && pos) { pendingAnchor = null; current = Object.assign({}, current, { c: pos.c, v: pos.v, pgIntro: PG.items[PG.idx] && PG.items[PG.idx].type === "intro" ? PG.idx : null }); return renderReader(current); }
+    if (PG && pos) {
+      pendingAnchor = null;
+      const it = PG.items[PG.idx];
+      current = Object.assign({}, current, { c: pos.c, v: pos.v, pgParsha: null,
+        pgIntro: it && it.type === "intro" ? { cid: it.cid, key: it.key, parsha: it.parsha } : null,
+        pgHaft: it && it.type === "haft" ? it.pid : null, pgHaftAt: it && it.type === "haft" ? { s: it.s, c: it.c, v: it.v } : null });
+      return renderReader(current);
+    }
     if (current.view === "chapter" && pos && pos.s === current.slug) current = Object.assign({}, current, { c: pos.c, v: null });
     return renderReader(current);
   }
@@ -1294,30 +1348,38 @@
     const hl = H.map(heLen), el = E.map((e) => e.length);
     const TH = hl.reduce((x, y) => x + y, 0) || 1, TE = el.reduce((x, y) => x + y, 0) || 1, r = TE / TH;
     const pH = [0], pE = [0]; hl.forEach((x) => pH.push(pH[pH.length - 1] + x)); el.forEach((x) => pE.push(pE[pE.length - 1] + x));
+    // everything about a phrase that the cost needs is worked out once, not in the inner loop
     const hw = H.map(heWords);
+    const ew = E.map((e) => unB(e).replace(RE_TAAMIM, "").replace(RE_NIKKUD, "").match(/[א-ת"״׳']{2,}/g) || []);
+    const hq = H.map((h) => /\?\W*$/.test(h)), eq = E.map((e) => /\?\W*$/.test(unB(e)));
     const moves = [[1, 1, 0], [1, 2, .6], [2, 1, .6], [1, 3, 1.2], [3, 1, 1.2], [2, 2, 1.2], [2, 3, 1.6], [3, 2, 1.6], [1, 4, 1.8], [4, 1, 1.8], [1, 5, 2.4], [5, 1, 2.4], [1, 0, 3]];
-    const INF = 1e9, D = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(INF)), B = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(null));
-    D[0][0] = 0;
+    const W = m + 1, INF = 1e9;
+    const D = new Float64Array((n + 1) * W).fill(INF), Bi = new Int32Array((n + 1) * W), Bj = new Int32Array((n + 1) * W);
+    D[0] = 0;
     for (let i = 0; i <= n; i++) for (let j = 0; j <= m; j++) {
-      if (D[i][j] >= INF) continue;
-      for (const [di, dj, pen] of moves) {
+      const d0 = D[i * W + j]; if (d0 >= INF) continue;
+      for (let t = 0; t < moves.length; t++) {
+        const di = moves[t][0], dj = moves[t][1];
         const ni = i + di, nj = j + dj; if (ni > n || nj > m) continue;
-        let hL = 0, eL = 0; for (let k = i; k < ni; k++) hL += hl[k]; for (let k = j; k < nj; k++) eL += el[k];
-        let cost = pen + Math.abs(Math.log((eL + 8) / (r * hL + 8))) * 4
+        const hL = pH[ni] - pH[i], eL = pE[nj] - pE[j];
+        let cost = moves[t][2] + Math.abs(Math.log((eL + 8) / (r * hL + 8))) * 4
           + Math.abs(pH[ni] / TH - pE[nj] / TE) * 4;                 // stay near the diagonal: no drift
         if (dj) {
-          const enTxt = E.slice(j, nj).join(" ");
-          const anchors = enTxt.replace(RE_TAAMIM, "").replace(RE_NIKKUD, "").match(/[א-ת"״׳']{2,}/g) || [];
-          let bonus = 0; for (const w of anchors) for (let k = i; k < ni; k++) if (hw[k].has(w)) { bonus += .8; break; }
+          let bonus = 0;
+          for (let l = j; l < nj && bonus < 2.4; l++) for (const w of ew[l]) {
+            for (let k = i; k < ni; k++) if (hw[k].has(w)) { bonus += .8; break; }
+            if (bonus >= 2.4) break;
+          }
           cost -= Math.min(bonus, 2.4);
-          if (/\?\W*$/.test(enTxt) && /\?\W*$/.test(H[ni - 1])) cost -= .5;
+          if (eq[nj - 1] && hq[ni - 1]) cost -= .5;
         }
-        if (D[i][j] + cost < D[ni][nj]) { D[ni][nj] = D[i][j] + cost; B[ni][nj] = [i, j]; }
+        const x = ni * W + nj;
+        if (d0 + cost < D[x]) { D[x] = d0 + cost; Bi[x] = i; Bj[x] = j; }
       }
     }
+    if (D[n * W + m] >= INF) return [{ he: H, en: [E.join(" ")] }];
     const rows = []; let i = n, j = m;
-    if (D[n][m] >= INF) return [{ he: H, en: [E.join(" ")] }];
-    while (i > 0 || j > 0) { const [pi, pj] = B[i][j]; rows.unshift({ he: H.slice(pi, i), en: E.slice(pj, j) }); i = pi; j = pj; }
+    while (i > 0 || j > 0) { const x = i * W + j, pi = Bi[x], pj = Bj[x]; rows.unshift({ he: H.slice(pi, i), en: E.slice(pj, j) }); i = pi; j = pj; }
     return rows;
   }
   function linesHTML(heHtml, enHtml) {
@@ -1790,25 +1852,25 @@
   function renderSettings() {
     const seg = (key, opts) => `<div class="seg" data-key="${key}">${opts.map(([v, l]) => `<button type="button" data-v="${v}" class="${settings[key] === v ? "on" : ""}">${l}</button>`).join("")}</div>`;
     const tog = (key, label) => `<label class="toggle"><span>${label}</span><input type="checkbox" data-key="${key}" ${settings[key] ? "checked" : ""}></label>`;
+    const scroll = settings.view !== "pages";
     const sec = (en, he, body, id) => `<section class="set-sec"${id ? ` data-sec="${id}"` : ""}><h3><span class="en">${en}</span><span class="he">${he}</span></h3>${body}</section>`;
     $("#settingsBody").innerHTML = `
       ${sec("Display", "תצוגה", `
         ${seg("view", [["scroll", "Scroll"], ["pages", "Pages · פסוק לעמוד"]])}
-        ${seg("mode", [["side", "Side by side"], ["stack", "Stacked"], ["he", "עברית"], ["en", "English"]])}
-        <div class="size-row"><span class="aa" style="font-size:.9rem">א</span><input type="range" min="0.8" max="1.6" step="0.05" value="${settings.scale}" data-key="scale" aria-label="Text size"><span class="aa" style="font-size:1.5rem">א</span></div>
+        ${scroll ? seg("mode", [["side", "Side by side"], ["stack", "Stacked"], ["he", "עברית"], ["en", "English"]]) : ""}
         ${seg("theme", [["paper", "Parchment"], ["white", "White"], ["dark", "Night"]])}`)}
       ${sec("Text", "טקסט", `
         ${tog("nikkud", "Nikkud")}
         ${tog("taamim", "Ta'amim")}
-        ${tog("notes", "English footnotes")}
+        ${scroll ? tog("notes", "English footnotes") : ""}
         ${tog("petuchot", "Parsha breaks (פ / ס)")}
         ${tog("sedarim", "Sedarim")}`)}
-      ${sec("Pages · commentaries", "עמודים · מפרשים", COMMENTARIES.map((c) => tog("pg_" + c.id, `${c.en}${c.note ? ` <small>(${c.note})</small>` : ""} · <span class="he">${c.he}</span>`)).join(""), "pages")}
-      ${sec("Rashi", "רש״י", `
+      ${scroll ? "" : sec("Pages · commentaries", "עמודים · מפרשים", COMMENTARIES.map((c) => tog("pg_" + c.id, `${c.en}${c.note ? ` <small>(${c.note})</small>` : ""} · <span class="he">${c.he}</span>`)).join("") + tog("rashiScript", "Rashi script"), "pages")}
+      ${scroll ? sec("Rashi", "רש״י", `
         ${tog("rashiOpen", "Always open")}
         ${tog("rashiEn", "English")}
         ${tog("rashiLines", "Line by line")}
-        ${tog("rashiScript", "Rashi script")}`)}
+        ${tog("rashiScript", "Rashi script")}`) : ""}
       ${sec("Torah reading", "קריאת התורה", `
         ${tog("maftir", "Maftir")}
         ${tog("weekday", "Weekday reading (Mon/Thu)")}
@@ -1824,36 +1886,54 @@
       settings[i.dataset.key] = i.checked; saveSettings(); afterSettingChange(i.dataset.key);
       if (i.dataset.key === "haftarah") renderSettings();
     }));
-    const rng = $("#settingsBody input[type=range]");
-    rng.addEventListener("input", () => { settings.scale = +rng.value; saveSettings(); });
   }
   /* Scroll ⇄ Pages: load what the other layout needs first, then swap inside a view transition —
      the screen cross-fades while the current pasuk glides between its two places */
-  let quietShow = false;
+  let quietShow = false, layoutSwitch = null;   // the running Scroll ⇄ Pages switch (a promise)
   function switchLayout() {
-    const pos = readerState.lastPos || { s: readerState.slug, c: current.c || 1, v: 1 };
+    let pos = readerState.lastPos || { s: readerState.slug, c: current.c || 1, v: 1 };
+    // a pasuk you've just picked (highlighted) and can see wins over the one at the top of the screen
+    const sel = readerState.sel, selRow = sel && !PG && $(`#v-${sel.s}-${sel.c}-${sel.v}`);
+    if (selRow && !selRow.closest(".haftarah") && sel.s === readerState.slug) {
+      const rc = selRow.getBoundingClientRect();
+      if (rc.bottom > $(".topbar").getBoundingClientRect().bottom + 10 && rc.top < innerHeight - 40) pos = { s: sel.s, c: sel.c, v: sel.v };
+    }
     const slug = readerState.slug;
     closeAllDialogs();
     if (settings.view === "pages") {
       // Scroll → Pages: open on the pasuk at the top of the screen (or its haftarah page)
-      const it = pos.haft ? null : { c: pos.c, v: pos.v };
-      current = pos.haft && pos.pid ? { view: "chapter", slug, c: pos.c, v: null, pgHaft: pos.pid } : { view: "chapter", slug, c: it.c, v: it.v };
+      // (on the haftarah: its page for the same haftarah pasuk)
+      if (pos.haft && pos.pid) {
+        const p = INDEX.parshiot.find((x) => x.id === pos.pid);
+        current = { view: "chapter", slug, c: p.range[3], v: null, pgHaft: pos.pid, pgHaftAt: pos.at || { s: pos.s, c: pos.c, v: pos.v } };
+      } else current = { view: "chapter", slug, c: pos.c, v: pos.v };
       suppressOpen = true; return renderReader(current);
     } else {
       // Pages → Scroll: put the same pasuk at the top of the screen, with nothing highlighted or opened
       const it = PG && PG.items[PG.idx];
-      if (it && it.type === "haft") { location.hash = `#parsha-${it.pid}-haftarah`; return; }
-      const c = it && it.type === "pasuk" ? it.c : 1, v = it && it.type === "pasuk" ? it.v : 1;
       const top = $(".topbar").getBoundingClientRect().bottom + ($("#copybar").hidden ? 0 : $("#copybar").offsetHeight) + 10;
-      pendingAnchor = it && it.type === "pasuk" ? { s: slug, c, v, top } : null;
+      if (it && it.type === "haft") {
+        // the haftarah card at the end of the parsha, opened, with the same haftarah pasuk at the top
+        const p = INDEX.parshiot.find((x) => x.id === it.pid);
+        pendingHaftOpen = it.pid;
+        pendingAnchor = { s: it.s, c: it.c, v: it.v, top };
+        current = { view: "chapter", slug, c: p.range[3], v: null };
+        history.replaceState(null, "", chapterHash(slug, p.range[3]));
+        suppressOpen = true; return renderReader(current);
+      }
+      const pIt = it && it.type === "intro" && it.parsha ? INDEX.parshiot.find((x) => x.id === it.parsha) : null;
+      const c = it && it.type === "pasuk" ? it.c : pIt ? pIt.range[1] : 1, v = it && it.type === "pasuk" ? it.v : pIt ? pIt.range[2] : 1;
+      pendingAnchor = it && (it.type === "pasuk" || pIt) ? { s: slug, c, v, top } : null;
       current = { view: "chapter", slug, c, v: null };
-      history.replaceState(null, "", chapterHash(slug, c, it && it.type === "pasuk" ? v : null));
+      history.replaceState(null, "", chapterHash(slug, c, it && (it.type === "pasuk" || pIt) ? v : null));
       suppressOpen = true; return renderReader(current);
     }
   }
   const curPasukEl = () => PG ? $("#pgTop .pg-pasuk .cu-he")
-    : readerState && readerState.lastPos && !readerState.lastPos.haft ? $(`#v-${readerState.lastPos.s}-${readerState.lastPos.c}-${readerState.lastPos.v} .v-he`) : null;
+    : readerState && readerState.lastPos ? $(`#v-${readerState.lastPos.s}-${readerState.lastPos.c}-${readerState.lastPos.v} .v-he`) : null;
   async function morphLayout(update) {
+    const mark = (n) => { try { performance.mark("layout-" + n); } catch {} };
+    mark("start");
     const slug = readerState && readerState.slug;
     if (slug) {   // have the data in memory, so the swap itself is instant
       const jobs = [loadText(slug)];
@@ -1865,6 +1945,7 @@
       const slow = setTimeout(() => toast("Loading…"), 350);
       await Promise.allSettled(jobs); clearTimeout(slow);
     }
+    mark("data");
     const reduce = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
     if (!document.startViewTransition || reduce) {
       const app = $("#app");
@@ -1877,16 +1958,20 @@
     }
     const oldEl = curPasukEl();
     if (oldEl) oldEl.style.viewTransitionName = "cur-pasuk";
-    document.documentElement.classList.add("vt-layout");
+    const bar = $(".topbar"); bar.style.viewTransitionName = "topbar";   // only these two elements change style, not the whole page
     quietShow = true;
+    let done; layoutSwitch = new Promise((r) => (done = r));
     const t = document.startViewTransition(async () => {
+      mark("snapshot");
       if (oldEl) oldEl.style.viewTransitionName = "";
       await update();
       const el = curPasukEl(); if (el) el.style.viewTransitionName = "cur-pasuk";
+      mark("updated");
     });
+    t.ready.then(() => mark("animating"), () => {});
     t.finished.catch(() => {}).finally(() => {
-      quietShow = false;
-      document.documentElement.classList.remove("vt-layout");
+      quietShow = false; done(); layoutSwitch = null; mark("done");
+      bar.style.viewTransitionName = "";
       const el = curPasukEl(); if (el) el.style.viewTransitionName = "";
     });
     return t.updateCallbackDone.catch(() => {});
