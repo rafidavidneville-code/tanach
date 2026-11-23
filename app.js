@@ -348,7 +348,6 @@
 
   /* ───────── Reader ───────── */
   const iconBookmark = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6.5 3.5h11v17l-5.5-4-5.5 4z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>`;
-  const iconBooks = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4.5 4.5h4v15h-4zM10 4.5h4v15h-4z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M15.6 5.6l3.8-1 3.1 14.6-3.8 1z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>`;
   const iconCopy = `<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="8.5" y="8.5" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M15.5 5.5v-1a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 4.5V14A1.5 1.5 0 0 0 6 15.5h1" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>`;
 
   function segmentsFor(r) {
@@ -440,7 +439,7 @@
       idx = items.findIndex((it) => it.type === "intro" && it.parsha === r.pgParsha);
       if (idx < 0) idx = items.findIndex((it) => it.type === "pasuk" && it.c === r.c && it.v === r.v);
     } else if (r.pgIntro) {
-      idx = items.findIndex((it) => it.type === "intro" && it.cid === r.pgIntro.cid && it.key === r.pgIntro.key);
+      idx = items.findIndex((it) => it.type === "intro" && it.key === r.pgIntro.key);
       if (idx < 0 && r.pgIntro.parsha) idx = items.findIndex((it) => (it.type === "intro" && it.parsha === r.pgIntro.parsha) || (it.type === "pasuk" && it.c === r.c && it.v === r.v));
       if (idx < 0) idx = 0;
     }
@@ -476,23 +475,25 @@
   /* the sequence of pages for a sefer: introductions, every pasuk, and each parsha's haftarah after its last pasuk */
   function buildPagerItems() {
     const b = book(PG.slug), items = [];
-    const pIntro = new Map();   // "c:v" of a parsha's first pasuk → its introduction pages
+    // all the introductions before a pasuk flow on together as one run of pages, each under its commentator's name
+    const seferParts = [], pIntro = new Map();   // "c:v" of a parsha's first pasuk → its introductions
     for (const c of PG.comms) {
       const secs = PG.intros[c.id] || [];
       const sefer = secs.filter((x) => !x.parsha);
-      if (sefer.length) items.push({ type: "intro", cid: c.id, secs: sefer, key: "sefer" });
+      if (sefer.length) seferParts.push({ cid: c.id, secs: sefer });
       for (const x of secs.filter((y) => y.parsha)) {
         const k = `${x.c}:${x.v}`;
-        if (!pIntro.has(k)) pIntro.set(k, []);
-        pIntro.get(k).push({ type: "intro", cid: c.id, secs: [x], key: x.key, parsha: x.parsha });
+        if (!pIntro.has(k)) pIntro.set(k, { type: "intro", key: x.key, parsha: x.parsha, parts: [] });
+        pIntro.get(k).parts.push({ cid: c.id, secs: [x] });
       }
     }
+    if (seferParts.length) items.push({ type: "intro", key: "sefer", parts: seferParts });
     PG.firstPasuk = items.length;
     const ends = new Map();
     if (settings.haftarah && b.section === "torah") for (const p of INDEX.parshiot) if (p.range[0] === PG.slug) ends.set(`${p.range[3]}:${p.range[4]}`, p);
     b.verses.forEach((n, ci) => {
       for (let v = 1; v <= n; v++) {
-        const pi = pIntro.get(`${ci + 1}:${v}`); if (pi) items.push(...pi);
+        const pi = pIntro.get(`${ci + 1}:${v}`); if (pi) items.push(pi);
         items.push({ type: "pasuk", c: ci + 1, v });
         const p = ends.get(`${ci + 1}:${v}`);
         if (p) haftRanges(p).forEach(([s, c1, v1, c2, v2], k) => {
@@ -524,12 +525,18 @@
     const reg = PG.phr = [];
     const b = book(PG.slug);
     if (it.type === "intro") {
-      const c = commMeta(it.cid), pp = it.parsha && INDEX.parshiot.find((x) => x.id === it.parsha);
+      const pp = it.parsha && INDEX.parshiot.find((x) => x.id === it.parsha);
+      const one = it.parts.length === 1 ? commMeta(it.parts[0].cid) : null;
+      const he = one ? `${introName(one)} ל${pp ? `פרשת ${pp.he}` : b.he}` : `הקדמות ל${pp ? `פרשת ${pp.he}` : `ספר ${b.he}`}`;
+      const en = one ? `${one.en} · Introduction to ${pp ? `Parashat ${pp.en}` : b.en}` : `Introductions to ${pp ? `Parashat ${pp.en}` : b.en}`;
       return {
-        top: pp ? `<h2 class="pg-title"><span class="en">${esc(c.en)} · Introduction to Parashat ${esc(pp.en)}</span><span class="he">${esc(introName(c))} לפרשת ${esc(pp.he)}</span></h2>`
-          : `<h2 class="pg-title"><span class="en">${esc(c.en)} · Introduction to ${esc(b.en)}</span><span class="he">${esc(introName(c))} ל${esc(b.he)}</span></h2>`,
-        body: it.secs.map((s) => `${it.secs.length > 1 ? `<h3 class="pg-cname"><span class="he">${esc(s.he)}</span><span class="en">${esc(s.en)}</span></h3>` : ""}
-          ${s.he_p.map((p, i) => `<p class="pg-para">${phrasedComment(p, s.en_p[i] || "", reg, `${c.en} · ${esc(s.en)}`)}</p>`).join("")}`).join(""),
+        top: `<h2 class="pg-title"><span class="en">${esc(en)}</span><span class="he">${esc(he)}</span></h2>`,
+        body: it.parts.map(({ cid, secs }) => {
+          const c = commMeta(cid);
+          return `<h3 class="pg-cname"><span class="he">${esc(c.he)}</span><span class="en">${esc(c.en)}</span></h3>` + secs.map((sc) =>
+            `${secs.length > 1 ? `<h4 class="pg-subname"><span class="he">${esc(sc.he)}</span><span class="en">${esc(sc.en)}</span></h4>` : ""}
+            ${sc.he_p.map((p, i) => `<p class="pg-para" data-anchor="i:${cid}:${esc(sc.key)}:${i}">${phrasedComment(p, sc.en_p[i] || "", reg, `${c.en} · ${esc(sc.en)}`)}</p>`).join("")}`).join("");
+        }).join(""),
       };
     }
     if (it.type === "haft") {
@@ -555,7 +562,7 @@
     return { top, body: commentaryBody(s, c, v, reg) };
   }
   function pgTools(s, c, v) {
-    return `<span class="pg-tools"><button type="button" class="pg-mf" aria-label="Choose commentaries" title="Choose commentaries">${iconBooks}</button><button type="button" class="pg-bm ${isBookmarked(s, c, v) ? "on" : ""}" data-s="${s}" data-c="${c}" data-v="${v}" aria-label="Bookmark" title="Bookmark">${iconBookmark}</button><button type="button" class="pg-copy" aria-label="Copy this pasuk" title="Copy this pasuk">${iconCopy}</button></span>`;
+    return `<span class="pg-tools"><button type="button" class="pg-bm ${isBookmarked(s, c, v) ? "on" : ""}" data-s="${s}" data-c="${c}" data-v="${v}" aria-label="Bookmark" title="Bookmark">${iconBookmark}</button><button type="button" class="pg-copy" aria-label="Copy this pasuk" title="Copy this pasuk">${iconCopy}</button></span>`;
   }
   function commentaryBody(s, c, v, reg) {
     let body = "";
@@ -563,7 +570,7 @@
       const list = at(resolved.get(commUrl(cm.id, s)), c, v); if (!list.length) continue;
       const enl = at(resolved.get(commEnUrl(cm.id, s)), c, v);
       body += `<h3 class="pg-cname"><span class="he">${cm.he}</span><span class="en">${esc(cm.en)}</span></h3>
-        ${list.map((x, i) => `<div class="pg-c cu" data-kind="comm" data-cid="${cm.id}" data-s="${s}" data-c="${c}" data-v="${v}" data-i="${i}"><div class="cu-he">${phrasedComment(x, enl[i] || "", reg, cm.enSrc ? `${cm.en} · ${cm.enSrc}` : cm.en)}</div></div>`).join("")}`;
+        ${list.map((x, i) => `<div class="pg-c cu" data-anchor="c:${cm.id}:${i}" data-kind="comm" data-cid="${cm.id}" data-s="${s}" data-c="${c}" data-v="${v}" data-i="${i}"><div class="cu-he">${phrasedComment(x, enl[i] || "", reg, cm.enSrc ? `${cm.en} · ${cm.enSrc}` : cm.en)}</div></div>`).join("")}`;
     }
     return body || `<p class="pg-none">אין פירוש על פסוק זה</p>`;
   }
@@ -576,11 +583,20 @@
     const colW = (W - (cols - 1) * PG_GAP) / cols;
     flow.style.columnWidth = colW + "px"; flow.style.columnGap = PG_GAP + "px"; flow.style.height = clip.clientHeight + "px";
     PG.W = W; PG.cols = cols;
-    const end = flow.querySelector(".pg-end");
-    PG.pages = end ? pageOf(end) + 1 : 1;
+    PG.pages = lastPage(flow) + 1;
     if (keepPhrase && PG.active != null) { const el = flow.querySelector(`.ph[data-p="${PG.active}"]`); if (el) PG.page = pageOf(el); }
     PG.page = Math.min(PG.page, PG.pages - 1);
     pagerMove(false);
+  }
+  function lastPage(flow) {
+    let el = flow.lastElementChild;
+    while (el && el.classList.contains("pg-end")) el = el.previousElementSibling;
+    if (!el) return 0;
+    const rs = el.getClientRects(); if (!rs.length) return 0;
+    const fr = flow.getBoundingClientRect(), r = rs[rs.length - 1];
+    let lo = r, x = (r.left + r.right) / 2 - fr.left;
+    for (const q of rs) { const qx = (q.left + q.right) / 2 - fr.left; if (qx < x) { x = qx; lo = q; } }   // leftmost fragment = last page
+    return Math.max(0, Math.floor((PG.W - x) / (PG.W + PG_GAP)));
   }
   /* right-to-left pages: page 0 is the flow's own box; page k lies k page-widths to its left */
   function pageOf(el) {
@@ -594,7 +610,7 @@
     flow.style.transform = `translateX(${PG.page * (PG.W + PG_GAP)}px)`;
     if (!animate) { void flow.offsetWidth; flow.style.transition = ""; }
     const it = PG.items[PG.idx], b = book(PG.slug);
-    $("#pgWhere").textContent = it.type === "intro" ? introName(commMeta(it.cid)) + (it.parsha ? ` · פרשת ${(INDEX.parshiot.find((x) => x.id === it.parsha) || {}).he || ""}` : "")
+    $("#pgWhere").textContent = it.type === "intro" ? (it.parts.length === 1 ? introName(commMeta(it.parts[0].cid)) : "הקדמות") + (it.parsha ? ` · פרשת ${(INDEX.parshiot.find((x) => x.id === it.parsha) || {}).he || ""}` : "")
       : it.type === "haft" ? `הפטרה · ${book(it.s).he} ${plainGem(it.c)}:${plainGem(it.v)}`
       : `${b.he} ${plainGem(it.c)}:${plainGem(it.v)}`;
     $("#pgCount").textContent = PG.pages > 1 ? `${PG.page + 1} / ${PG.pages}` : "";
@@ -689,7 +705,6 @@
     $$(".pg-step", pager).forEach((b) => b.addEventListener("click", () => phraseStep(+b.dataset.step)));
     $("#pgStage").addEventListener("click", (e) => {
       if (PG.swiped) return;
-      if (e.target.closest(".pg-mf")) { openSettings("pages"); return; }
       const bm = e.target.closest(".pg-bm");
       if (bm) { toggleBookmark(bm.dataset.s, +bm.dataset.c, +bm.dataset.v, bm); return; }
       const cp = e.target.closest(".pg-copy");
@@ -944,8 +959,13 @@
     // before: keep whatever the reader is looking at exactly where it is
     const anchor = topRow(); const before = anchor ? anchor.getBoundingClientRect().top : 0;
     const tpl = document.createElement("template"); tpl.innerHTML = html;
-    const secs = [...tpl.content.children]; body.prepend(tpl.content); afterInsert(secs);
-    if (anchor) { const d = anchor.getBoundingClientRect().top - before; if (d) { selfScrollAt = Date.now(); window.scrollBy(0, d); } }
+    const secs = [...tpl.content.children];
+    // the new perakim go in a box of a whole number of pixels, so the scroll correction is exact and the
+    // text on screen doesn't shift by a fraction of a pixel (which shows as a shimmer)
+    const box = document.createElement("div"); box.className = "perek-batch"; box.append(tpl.content);
+    body.prepend(box); afterInsert(secs);
+    const h = box.getBoundingClientRect().height; box.style.minHeight = Math.ceil(h) + "px";
+    if (anchor) { const d = anchor.getBoundingClientRect().top - before; if (d) { selfScrollAt = Date.now(); window.scrollBy(0, Math.round(d)); } }
   }
   function addPerek(st, c, where) { addPerakim(st, where); }
   function fillSefer(st, c0) {
@@ -1123,7 +1143,7 @@
       pendingAnchor = null;
       const it = PG.items[PG.idx];
       current = Object.assign({}, current, { c: pos.c, v: pos.v, pgParsha: null,
-        pgIntro: it && it.type === "intro" ? { cid: it.cid, key: it.key, parsha: it.parsha } : null,
+        pgIntro: it && it.type === "intro" ? { key: it.key, parsha: it.parsha } : null,
         pgHaft: it && it.type === "haft" ? it.pid : null, pgHaftAt: it && it.type === "haft" ? { s: it.s, c: it.c, v: it.v } : null });
       return renderReader(current);
     }
@@ -1280,10 +1300,11 @@
       ${meta.enDir ? `<button type="button" class="pill ${settings.rashiEn ? "on" : ""}" data-tool="rashiEn" aria-pressed="${settings.rashiEn}">English</button>` : ""}
       ${meta.enDir && settings.rashiEn ? `<button type="button" class="pill ${settings.rashiLines ? "on" : ""}" data-tool="rashiLines" aria-pressed="${settings.rashiLines}">Line by line</button>` : ""}`;
     $$("[data-tool]", el).forEach((b) => b.addEventListener("click", () => {
+      const spot = captureSpot(), keep = () => restoreSpot(spot);
       const k = b.dataset.tool; settings[k] = !settings[k]; saveSettings(); renderReaderTools();
-      if (k === "rashiLines") { decorateCommentary(); return; }
+      if (k === "rashiLines") { keep(); decorateCommentary().then(keep); return; }
       if (k === "rashiOpen" && !settings.rashiOpen) readerState.open.clear();
-      decorateCommentary();
+      keep(); decorateCommentary().then(keep);
       toast(k === "rashiOpen" ? (settings.rashiOpen ? `${meta.en} open under every pasuk` : `${meta.en} closed — tap a pasuk to open`) : (settings.rashiEn ? `English ${meta.en} on` : `English ${meta.en} off`));
     }));
   }
@@ -1443,7 +1464,7 @@
     row.classList.toggle("open", open);
     if (!list.length) return;
     $(".v-tools", row).insertAdjacentHTML("beforeend",
-      `<button type="button" class="rashi-pill" aria-expanded="${open}" title="${list.length} ${commMeta(st.tab).en} comment${list.length > 1 ? "s" : ""}"><span class="he">${commMeta(st.tab).he}</span><span class="n">${list.length}</span></button>`);
+      `<button type="button" class="rashi-pill" aria-expanded="${open}" title="${list.length} ${commMeta(st.tab).en} comment${list.length > 1 ? "s" : ""}"><span class="he">${commMeta(st.tab).he}</span><span class="n">${list.length}</span><svg class="chev" viewBox="0 0 10 10" width="9" height="9" aria-hidden="true"><path d="M2 3.6l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>`);
     if (open) {
       row.insertAdjacentHTML("beforeend", dropdownHTML(st.tab, s, c, v, list, enl));
     }
@@ -1850,6 +1871,12 @@
 
   /* ───────── Settings dialog ───────── */
   function renderSettings() {
+    const body = $("#settingsBody"), keepTop = body.scrollTop;
+    requestAnimationFrame(() => { body.scrollTop = keepTop; });
+    renderSettingsBody();
+    body.scrollTop = keepTop;
+  }
+  function renderSettingsBody() {
     const seg = (key, opts) => `<div class="seg" data-key="${key}">${opts.map(([v, l]) => `<button type="button" data-v="${v}" class="${settings[key] === v ? "on" : ""}">${l}</button>`).join("")}</div>`;
     const tog = (key, label) => `<label class="toggle"><span>${label}</span><input type="checkbox" data-key="${key}" ${settings[key] ? "checked" : ""}></label>`;
     const scroll = settings.view !== "pages";
@@ -1863,9 +1890,9 @@
         ${tog("nikkud", "Nikkud")}
         ${tog("taamim", "Ta'amim")}
         ${scroll ? tog("notes", "English footnotes") : ""}
-        ${tog("petuchot", "Parsha breaks (פ / ס)")}
+        ${scroll ? tog("petuchot", "Parsha breaks (פ / ס)") : ""}
         ${tog("sedarim", "Sedarim")}`)}
-      ${scroll ? "" : sec("Pages · commentaries", "עמודים · מפרשים", COMMENTARIES.map((c) => tog("pg_" + c.id, `${c.en}${c.note ? ` <small>(${c.note})</small>` : ""} · <span class="he">${c.he}</span>`)).join("") + tog("rashiScript", "Rashi script"), "pages")}
+      ${scroll ? "" : sec("Pages · commentaries", "עמודים · מפרשים", COMMENTARIES.map((c) => tog("pg_" + c.id, `<span class="tg2"><span class="he">${c.he}</span><small>${c.en}${c.note ? ` · ${c.note} only` : ""}</small></span>`)).join("") + tog("rashiScript", "Rashi script"), "pages")}
       ${scroll ? sec("Rashi", "רש״י", `
         ${tog("rashiOpen", "Always open")}
         ${tog("rashiEn", "English")}
@@ -1879,11 +1906,13 @@
       ${sec("Copying", "העתקה", seg("copyFmt", [["both", "Hebrew + English"], ["he", "Hebrew only"]]))}
       ${sec("Offline", "ללא חיבור", `<a class="set-link" href="#offline">Download sefarim for offline reading →</a>`)}`;
     $$("#settingsBody .seg").forEach((s) => s.addEventListener("click", (e) => {
-      const b = e.target.closest("button"); if (!b) return;
-      settings[s.dataset.key] = b.dataset.v; saveSettings(); renderSettings(); afterSettingChange(s.dataset.key);
+      const b = e.target.closest("button"); if (!b || settings[s.dataset.key] === b.dataset.v) return;
+      const spot = captureSpot();
+      settings[s.dataset.key] = b.dataset.v; saveSettings(); renderSettings(); afterSettingChange(s.dataset.key, spot);
     }));
     $$("#settingsBody input[type=checkbox]").forEach((i) => i.addEventListener("change", () => {
-      settings[i.dataset.key] = i.checked; saveSettings(); afterSettingChange(i.dataset.key);
+      const spot = captureSpot();
+      settings[i.dataset.key] = i.checked; saveSettings(); afterSettingChange(i.dataset.key, spot);
       if (i.dataset.key === "haftarah") renderSettings();
     }));
   }
@@ -1899,7 +1928,6 @@
       if (rc.bottom > $(".topbar").getBoundingClientRect().bottom + 10 && rc.top < innerHeight - 40) pos = { s: sel.s, c: sel.c, v: sel.v };
     }
     const slug = readerState.slug;
-    closeAllDialogs();
     if (settings.view === "pages") {
       // Scroll → Pages: open on the pasuk at the top of the screen (or its haftarah page)
       // (on the haftarah: its page for the same haftarah pasuk)
@@ -1976,22 +2004,97 @@
     });
     return t.updateCallbackDone.catch(() => {});
   }
+  /* ── keeping your place when a setting changes ── */
+  function captureSpot() {
+    if (PG && $(".pager")) return { pages: pagerSpot() };
+    if (readerState && $(".reader")) { const row = topRow(); return row ? { row: row.id, top: row.getBoundingClientRect().top } : null; }
+    return null;
+  }
+  function restoreSpot(a) {
+    if (!a) return;
+    if (a.pages) { if (PG && $(".pager")) pagerReanchor(a.pages); return; }
+    const r = a.row && document.getElementById(a.row);
+    if (r) { const d = r.getBoundingClientRect().top - a.top; if (Math.abs(d) > .5) { selfScrollAt = Date.now(); window.scrollBy(0, d); } }
+  }
+  const itemIdent = (it) => it && ({ type: it.type, key: it.key, parsha: it.parsha, c: it.c, v: it.v, pid: it.pid, s: it.s });
+  const sameItem = (it, id) => it.type === id.type && (id.type === "intro" ? it.key === id.key
+    : id.type === "haft" ? it.pid === id.pid && it.s === id.s && it.c === id.c && it.v === id.v : it.c === id.c && it.v === id.v);
+  function pagerSpot() {
+    const spot = { ident: itemIdent(PG.items[PG.idx]), page: PG.page };
+    const first = $$("#pgFlow .ph").find((x) => pageOf(x) === PG.page);
+    const bl = first && first.closest("[data-anchor]");
+    if (bl) { spot.block = bl.dataset.anchor; spot.k = $$(".ph", bl).indexOf(first); }
+    if (PG.active != null) {
+      const el = $(`#pgStage .ph[data-p="${PG.active}"]`), ab = el && el.closest("[data-anchor]");
+      if (ab) spot.active = { block: ab.dataset.anchor, k: $$(".ph", ab).indexOf(el) };
+      else if (el && el.closest("#pgTop")) spot.active = { top: true, k: $$("#pgTop .ph").indexOf(el) };
+    }
+    return spot;
+  }
+  function pagerReanchor(spot) {
+    pagerLayout(false);
+    let pg = spot.page;
+    const bl = spot.block && $(`#pgFlow [data-anchor="${spot.block}"]`);
+    if (bl) { const phs = $$(".ph", bl); const ph = phs[Math.min(spot.k || 0, phs.length - 1)]; if (ph) pg = pageOf(ph); }
+    PG.page = Math.max(0, Math.min(pg, PG.pages - 1)); pagerMove(false);
+    if (spot.active) {
+      let el = null;
+      if (spot.active.top) el = $$("#pgTop .ph")[spot.active.k];
+      else { const ab = $(`#pgFlow [data-anchor="${spot.active.block}"]`); if (ab) el = $$(".ph", ab)[spot.active.k]; }
+      if (el) showPhrase(+el.dataset.p);
+    }
+  }
+  /* redraw the current page in place (optionally rebuilding the list of pages first) */
+  function pagerRefresh(spot, rebuild) {
+    if (!PG || !$(".pager")) return;
+    if (rebuild) buildPagerItems();
+    const id = spot.ident;
+    let i = PG.items.findIndex((it) => sameItem(it, id));
+    if (i < 0) {   // what this page was is gone (haftarah or introductions switched off): the nearest pasuk
+      const p = id.parsha || id.pid ? INDEX.parshiot.find((x) => x.id === (id.parsha || id.pid)) : null;
+      const [c, v] = id.type === "haft" && p ? [p.range[3], p.range[4]] : p ? [p.range[1], p.range[2]] : id.type === "intro" ? [1, 1] : [id.c, id.v];
+      i = PG.items.findIndex((it) => it.type === "pasuk" && it.c === c && it.v === v);
+      if (i < 0) i = PG.firstPasuk;
+      spot = { ident: itemIdent(PG.items[i]), page: 0 };
+    }
+    quietShow = true; try { pagerShow(i, 0); } finally { quietShow = false; }
+    pagerReanchor(spot);
+  }
+  async function refreshPagerComms(spot) {
+    const slug = PG.slug, comms = COMMENTARIES.filter((c) => avail(c, slug) && pgOn(c));
+    await Promise.allSettled(comms.flatMap((c) => [loadComm(c.id, slug), c.enDir ? loadCommEn(c.id, slug) : null,
+      c.introDir && INDEX.intros && (INDEX.intros[c.id] || []).includes(slug) && !PG.intros[c.id]
+        ? fetchJSON(c.introDir + slug + ".json").then((d) => { if (PG) PG.intros[c.id] = d; }) : null]));
+    if (!PG || PG.slug !== slug) return;
+    PG.comms = comms;
+    pagerRefresh(spot, true);
+  }
   function openSettings(section) {
     renderSettings(); openDialog("#settingsOverlay");
     if (section) { const el = $(`#settingsBody [data-sec="${section}"]`); if (el) { el.scrollIntoView({ block: "start" }); el.classList.add("flash"); setTimeout(() => el.classList.remove("flash"), 1200); } }
   }
-  function afterSettingChange(key) {
-    if (key.startsWith("pg_")) { if (PG && readerState) rerenderKeepingPlace(); return; }
+  function afterSettingChange(key, spot) {
     if (key === "view") {
       if (readerState && current && current.view !== "home") morphLayout(switchLayout);
       return;
     }
     if (key === "copyFmt") { updateCopyBar(); return; }
     if (!readerState || !current || current.view === "home") return;
-    if (["nikkud", "taamim", "petuchot", "sedarim"].includes(key)) rerenderKeepingPlace(); else if (key === "weekday" || key === "maftir") { paintAliyot(); updateAliyahBtn(readerState.lastPos); }
-    else if (key === "rashiLines") { renderReaderTools(); decorateCommentary(); }
+    if (PG && $(".pager")) {
+      // Pages: only what the page shows is redrawn, and you stay on the same page and phrase
+      if (key.startsWith("pg_")) refreshPagerComms(spot ? spot.pages : pagerSpot());
+      else if (["nikkud", "taamim", "sedarim", "maftir", "weekday"].includes(key)) { pagerRefresh(spot ? spot.pages : pagerSpot(), false); updateAliyahBtn(readerState.lastPos); }
+      else if (key === "haftarah" || key === "haftCustom") pagerRefresh(spot ? spot.pages : pagerSpot(), true);
+      else if (key === "rashiScript" && spot) restoreSpot(spot);       // a different font: same text, measured again
+      return;                                                         // theme and the like: nothing on the page moves
+    }
+    const keep = () => restoreSpot(spot);
+    if (["nikkud", "taamim", "petuchot", "sedarim"].includes(key)) rerenderKeepingPlace();
+    else if (key === "weekday" || key === "maftir") { paintAliyot(); updateAliyahBtn(readerState.lastPos); keep(); }
+    else if (key === "rashiLines") { renderReaderTools(); keep(); decorateCommentary().then(keep); }
     else if (key === "haftarah" || key === "haftCustom") rerenderKeepingPlace();
-    else if (key === "rashiOpen" || key === "rashiEn") { if (key === "rashiOpen" && !settings.rashiOpen) readerState.open.clear(); renderReaderTools(); decorateCommentary(); }
+    else if (key === "rashiOpen" || key === "rashiEn") { if (key === "rashiOpen" && !settings.rashiOpen) readerState.open.clear(); renderReaderTools(); keep(); decorateCommentary().then(keep); }
+    else keep();                                                      // layout and font choices: same pasuk, same height on screen
   }
 
   /* ───────── Dialog plumbing ───────── */

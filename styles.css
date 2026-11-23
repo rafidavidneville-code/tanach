@@ -236,8 +236,11 @@ button { font: inherit; color: inherit; }
 /* continuous sefer: the page manages its own scroll position while perakim are added */
 .reader { overflow-anchor: none; }
 .perek { scroll-margin-top: calc(var(--topbar-h) + var(--bar-h) + 6px); }
-.sefer .perek + .perek .chapter-head { margin-top: 46px; }
-.sefer .perek:first-child .chapter-head { margin-top: 18px; }
+/* every perek heading in a sefer has the same margin (nothing changes size as perakim are added above),
+   and the sefer itself sits 28px higher so the very first heading is 18px down */
+.sefer .chapter-head { margin-top: 46px; }
+.sefer { margin-top: -28px; }
+.perek-batch { display: flow-root; }
 
 /* parasha petucha / setuma — the gaps in a Sefer Torah */
 .ps-break { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 0 10px; }
@@ -319,6 +322,20 @@ button { font: inherit; color: inherit; }
 .rashi-pill .n { font-size: .62rem; font-family: var(--f-ui); }
 .rashi-pill:hover { border-color: var(--gold); }
 .verse.open .rashi-pill { background: var(--gold); color: var(--paper); border-color: var(--gold); }
+/* the Rashi button: a soft chip — name in Rashi script, a round count, an arrow that turns when open */
+.v-tools .rashi-pill {
+  direction: rtl; display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px 3px 5px; border-radius: 999px; line-height: 1;
+  border: 1px solid color-mix(in srgb, var(--gold) 40%, transparent); background: color-mix(in srgb, var(--gold) 11%, var(--paper));
+  color: color-mix(in srgb, var(--gold) 70%, var(--ink)); cursor: pointer; box-shadow: 0 1px 1px rgba(60, 40, 10, .06);
+  transition: background .15s, border-color .15s, color .15s, box-shadow .15s;
+}
+.v-tools .rashi-pill .he { font-family: var(--f-rashi); font-size: .8rem; font-weight: 600; }
+.v-tools .rashi-pill .n { display: inline-grid; place-items: center; min-width: 15px; height: 15px; padding: 0 3px; border-radius: 999px; background: var(--gold); color: var(--paper); font-size: .6rem; font-weight: 600; }
+.v-tools .rashi-pill .chev { opacity: .75; transition: transform .2s; }
+.v-tools .rashi-pill:hover { border-color: var(--gold); box-shadow: 0 1px 3px rgba(60, 40, 10, .12); }
+.verse.open .v-tools .rashi-pill { background: var(--gold); border-color: var(--gold); color: var(--paper); }
+.verse.open .v-tools .rashi-pill .n { background: var(--paper); color: var(--gold); }
+.verse.open .v-tools .rashi-pill .chev { transform: rotate(180deg); opacity: 1; }
 .verse:not(.has-rashi) { cursor: default; }
 .verse.open { background: color-mix(in srgb, var(--paper-2) 55%, transparent); }
 
@@ -503,6 +520,9 @@ body.copy-mode .comment, body.copy-mode .ir-c { padding-left: 26px; }
   .v-en { padding-top: 6px; color: var(--ink-2); }
   .rashi-pill { flex-direction: column; gap: 0; padding: 2px 3px; border-radius: 8px; }
   .rashi-pill .he { font-size: .6rem; }
+  .v-tools .rashi-pill { flex-direction: column; gap: 3px; padding: 5px 3px 4px; border-radius: 10px; }
+  .v-tools .rashi-pill .he { font-size: .68rem; }
+  .v-tools .rashi-pill .chev { display: none; }
   .rrow, .mode-stack .rrow { grid-template-columns: minmax(0, 1fr) 2.2rem; grid-template-areas: "he gap" "en gap"; column-gap: 8px; row-gap: 6px; }
   .rrow.no-en .r-he { grid-column: 1 / 2; }
   .mode-he .rrow { grid-template-columns: minmax(0, 1fr) 2.2rem; grid-template-areas: "he gap"; }
@@ -654,6 +674,9 @@ body.copy-mode .comment, body.copy-mode .ir-c { padding-left: 26px; }
 .set-sec h3 .he { font-size: 1.05rem; color: var(--gold); }
 .set-sec .toggle { padding: 3px 0; }
 .set-sec .toggle small { color: var(--ink-3); font-size: .8em; }
+.tg2 { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; line-height: 1.25; }
+.tg2 .he { font-size: 1.08rem; font-weight: 600; }
+.tg2 small { font-size: .78rem !important; }
 .set-sec .toggle .he { font-family: var(--f-he, inherit); }
 .set-sec.flash { animation: secflash 1.2s ease; }
 @keyframes secflash { 0%, 40% { background: color-mix(in srgb, var(--gold) 18%, transparent); } 100% { background: transparent; } }
@@ -761,7 +784,10 @@ body.pages-mode .site-footer { display: none; }
 .pg-c + .pg-cname { margin-top: 14px; }
 .pg-cname .en { font-size: .62rem; text-transform: uppercase; letter-spacing: .12em; color: var(--ink-3); font-weight: 500; }
 .pg-cname .he { font-size: 1.12rem; font-weight: 700; color: var(--accent); }
-.pg-c, .pg-para { direction: rtl; text-align: justify; font-family: var(--f-rashi); font-size: calc(var(--rashi-size) * 1.05); line-height: 1.8; margin: 0 0 6px; }
+.pg-c, .pg-para { direction: rtl; text-align: justify; font-family: var(--f-rashi); font-size: calc(var(--rashi-size) * 1.05); line-height: 1.8; margin: 0 0 6px; orphans: 1; widows: 1; }
+.pg-subname { margin: 6px 0 4px; display: flex; justify-content: center; align-items: baseline; gap: 8px; break-after: avoid; font-weight: 600; }
+.pg-subname .he { font-size: 1rem; color: var(--ink-2); }
+.pg-subname .en { font-size: .66rem; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
 .rashi-plain .pg-c, .rashi-plain .pg-para { font-family: var(--f-he); }
 .pg-c b, .pg-para b { font-family: var(--f-he); font-weight: 700; color: var(--accent); }
 .pg-c + .pg-c { border-top: 1px dashed var(--rule-2); padding-top: 6px; }
