@@ -108,7 +108,22 @@
   const nbBook = (slug, d) => { const s = ORDER[ORDER.indexOf(slug) + d]; return s && canon(s) === canon(slug) ? s : null; };
   const cache = new Map();      // url → promise
   const resolved = new Map();   // url → data (sync access for copy)
+  /* memory: the data of the sefarim used last is kept, older ones are let go (a lighter page is less likely
+     to be closed by the iPad while it is in the background) */
+  const recentSlugs = [];
+  const slugOf = (url) => { const m = /^data\/[^/]+\/([a-z0-9-]+)\.json$/.exec(url); return m && !/^data\/(index|manifest|lex|shabbat-il)\.json$/.test(url) ? m[1] : null; };
+  function touchSlug(slug) {
+    const i = recentSlugs.indexOf(slug); if (i >= 0) recentSlugs.splice(i, 1);
+    recentSlugs.unshift(slug);
+    if (recentSlugs.length <= 5) return;
+    const keep = new Set(recentSlugs.slice(0, 5));
+    if (readerState) keep.add(readerState.slug);
+    if (PG) keep.add(PG.slug);
+    for (const u of [...cache.keys()]) { const s2 = slugOf(u); if (s2 && !keep.has(s2)) { cache.delete(u); resolved.delete(u); } }
+    for (let k = recentSlugs.length - 1; k >= 0; k--) if (!keep.has(recentSlugs[k])) recentSlugs.splice(k, 1);
+  }
   function fetchJSON(url) {
+    const sl = slugOf(url); if (sl) touchSlug(sl);
     if (!cache.has(url)) cache.set(url, fetch(url)
       .then((r) => { if (!r.ok) throw new Error(r.status + " " + url); return r.json(); })
       .then((d) => { resolved.set(url, d); return d; })
@@ -355,7 +370,10 @@
   }
   function wireCards(root) {
     $$(".pcard", root).forEach((el) => {
-      const go = () => { location.hash = el.dataset.href; };
+      const go = () => {
+        if (el.dataset.cm) { const [cid, s, c, v, i] = el.dataset.cm.split(":"); pendingComment = { cid, s, c: +c, v: +v, i: +i }; }
+        location.hash = el.dataset.href;
+      };
       el.addEventListener("click", (e) => { if (e.target.closest("button, sup")) return; go(); });
       el.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
     });
@@ -380,18 +398,65 @@
     const texts = {};
     await Promise.all([...new Set(list.map((b) => b.b))].map((s) => loadText(s).then((t) => (texts[s] = t)).catch(() => {})));
     if (!$("#bmList")) return;
-    el.innerHTML = `<div class="pcards">${list.filter((bm) => texts[bm.b]).map((bm) =>
-      pasukCard({ slug: bm.b, c: bm.c, v: bm.v, text: texts[bm.b], href: chapterHash(bm.b, bm.c, bm.v), removable: true })).join("")}</div>`;
+    const comms = {};
+    await Promise.all(list.filter((bm) => bm.cid && commMeta(bm.cid)).map(async (bm) => {
+      const k = `${bm.cid}:${bm.b}`; if (comms[k]) return;
+      try { comms[k] = { he: await loadComm(bm.cid, bm.b), en: commMeta(bm.cid).enDir ? await loadCommEn(bm.cid, bm.b).catch(() => null) : null }; } catch {}
+    }));
+    if (!$("#bmList")) return;
+    el.innerHTML = `<div class="pcards">${list.filter((bm) => texts[bm.b]).map((bm) => {
+      if (!bm.cid) return pasukCard({ slug: bm.b, c: bm.c, v: bm.v, text: texts[bm.b], href: chapterHash(bm.b, bm.c, bm.v), removable: true });
+      const d = comms[`${bm.cid}:${bm.b}`]; if (!d) return "";
+      const he = at(d.he, bm.c, bm.v)[bm.i]; if (!he) return "";
+      const en = d.en ? at(d.en, bm.c, bm.v)[bm.i] || "" : "";
+      const m = commMeta(bm.cid);
+      return `<div class="pcard ccard" data-href="${esc(chapterHash(bm.b, bm.c, bm.v))}" data-cm="${bm.cid}:${bm.b}:${bm.c}:${bm.v}:${bm.i}" tabindex="0" role="link">
+        <div class="pc-label"><span>${esc(m.en)}</span><span class="he">${m.he}</span></div>
+        <div class="pc-ref"><span class="en">${esc(refEn(bm.b, bm.c, bm.v))}</span><span class="he">${esc(refHe(bm.b, bm.c, bm.v))}</span></div>
+        <div class="pc-he pc-comm">${heComm(he)}</div>
+        ${en ? `<div class="pc-en pc-comm-en">${en}</div>` : ""}
+        <button class="icon-btn pc-rm" type="button" data-rmc="${bm.cid}:${bm.b}:${bm.c}:${bm.v}:${bm.i}" aria-label="Remove bookmark" title="Remove bookmark">${iconX}</button>
+      </div>`;
+    }).join("")}</div>`;
     wireCards(el);
     $$("[data-rm]", el).forEach((b) => b.addEventListener("click", (e) => {
       e.stopPropagation();
       const [s, c, v] = b.dataset.rm.split(":"); removeBookmark(s, +c, +v); renderBookmarks();
     }));
+    $$("[data-rmc]", el).forEach((b) => b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const [cid, s, c, v, i] = b.dataset.rmc.split(":"); removeCommBm(cid, s, +c, +v, +i); renderBookmarks();
+    }));
   }
 
   /* ───────── Bookmarks ───────── */
-  const isBookmarked = (s, c, v) => bookmarks.some((b) => b.b === s && b.c === c && b.v === v);
-  function removeBookmark(s, c, v) { bookmarks = bookmarks.filter((b) => !(b.b === s && b.c === c && b.v === v)); store.set("bookmarks", bookmarks); }
+  const isBookmarked = (s, c, v) => bookmarks.some((b) => !b.cid && b.b === s && b.c === c && b.v === v);
+  function removeBookmark(s, c, v) { bookmarks = bookmarks.filter((b) => b.cid || !(b.b === s && b.c === c && b.v === v)); store.set("bookmarks", bookmarks); }
+  /* a single comment (Rashi, or any meforash in Pages) can be saved too */
+  const isCommBm = (cid, s, c, v, i) => bookmarks.some((b) => b.cid === cid && b.b === s && b.c === c && b.v === v && b.i === i);
+  function removeCommBm(cid, s, c, v, i) { bookmarks = bookmarks.filter((b) => !(b.cid === cid && b.b === s && b.c === c && b.v === v && b.i === i)); store.set("bookmarks", bookmarks); }
+  function toggleCommBm(cid, s, c, v, i, btn) {
+    const name = commMeta(cid).en;
+    if (isCommBm(cid, s, c, v, i)) { removeCommBm(cid, s, c, v, i); btn && btn.classList.remove("on"); toast("Bookmark removed"); return; }
+    bookmarks.push({ b: s, c, v, cid, i, t: Date.now() });
+    store.set("bookmarks", bookmarks);
+    btn && btn.classList.add("on");
+    toast(`Saved ${name} on ${refEn(s, c, v)}`);
+  }
+  // opening a saved comment: shown once the pasuk is drawn
+  let pendingComment = null;
+  function showPendingComment() {
+    const pc = pendingComment; if (!pc) return; pendingComment = null;
+    if (PG) {
+      const el = $(`#pgFlow .pg-c[data-cid="${pc.cid}"][data-i="${pc.i}"]`); if (!el) return;
+      const ph = $(".ph", el);
+      if (ph) showPhrase(+ph.dataset.p); else { const pg = pageOf(el); if (pg !== PG.page) { PG.page = pg; pagerMove(); } }
+      return;
+    }
+    const row = $(`#v-${pc.s}-${pc.c}-${pc.v}`); if (!row) return;
+    const cr = $(`.rrow[data-cid="${pc.cid}"][data-i="${pc.i}"]`, row);
+    if (cr) { cr.classList.remove("flash"); void cr.offsetWidth; cr.classList.add("flash"); }
+  }
   function toggleBookmark(s, c, v, btn) {
     if (isBookmarked(s, c, v)) { removeBookmark(s, c, v); btn && btn.classList.remove("on"); toast("Bookmark removed"); return; }
     bookmarks.push({ b: s, c, v, t: Date.now() });
@@ -523,6 +588,7 @@
       </div>`;
     wirePager();
     pagerShow(PG.idx, 0);
+    showPendingComment();
     preloadForCopy();
   }
 
@@ -740,7 +806,11 @@
     if (i == null) { src.textContent = ""; en.innerHTML = `<span class="pg-hint">Tap any phrase to see its translation here</span>`; return; }
     const el = $(`#pgStage .ph[data-p="${i}"]`); if (el) el.classList.add("on");
     const ph = PG.phr[i];
-    src.textContent = ph.src;
+    const cu = el && el.closest(".pg-c");
+    if (cu) {
+      const d = cu.dataset, on = isCommBm(d.cid, d.s, +d.c, +d.v, +d.i);
+      src.innerHTML = `${esc(ph.src)} <button type="button" class="tx-bm ${on ? "on" : ""}" data-cbm="${d.cid}:${d.s}:${d.c}:${d.v}:${d.i}" aria-label="Bookmark this comment" title="Bookmark this comment">${iconBookmark}<span>${on ? "Saved" : "Save"}</span></button>`;
+    } else src.textContent = ph.src;
     if (ph.html) en.innerHTML = ph.html; else en.textContent = ph.en || "—";
     if (el && el.closest("#pgFlow")) { const pg = pageOf(el); if (pg !== PG.page) { PG.page = pg; pagerMove(); } }
   }
@@ -760,6 +830,12 @@
     const pager = $("#pager"), vp = $(".pg-viewport", pager);
     $$(".pg-btn", pager).forEach((b) => b.addEventListener("click", () => pagerStep(+b.dataset.go)));
     $$(".pg-step", pager).forEach((b) => b.addEventListener("click", () => phraseStep(+b.dataset.step)));
+    $("#pgTrans").addEventListener("click", (e) => {
+      const b = e.target.closest(".tx-bm"); if (!b) return;
+      const [cid, s, c, v, i] = b.dataset.cbm.split(":");
+      toggleCommBm(cid, s, +c, +v, +i, b);
+      const sp = $("span", b); if (sp) sp.textContent = b.classList.contains("on") ? "Saved" : "Save";
+    });
     $("#pgStage").addEventListener("click", (e) => {
       if (PG.swiped) return;
       const bm = e.target.closest(".pg-bm");
@@ -980,6 +1056,7 @@
     if (pendingAnchor) restoreAnchor();
     else if (early) restoreSpot(spot);
     else place();
+    showPendingComment();
     trackPosition(true);
     fillSefer(st, c0);
     preloadPagesData(slug);
@@ -1119,6 +1196,7 @@
     const pos = { s: row.dataset.s, c: +row.dataset.c, v: +row.dataset.v, haft: !!hs };
     if (hs) pos.pid = hs.dataset.p;
     st.lastPos = pos; saveLast(pos); updateAliyahBtn(pos);
+    savePlace(row);
     warmTop();
     if (st.r.view === "chapter" && !pos.haft && (force || pos.c !== st.curC)) {
       st.curC = pos.c; current.c = pos.c;
@@ -1131,11 +1209,12 @@
     }
   }
   /* after a re-render (settings change), put the same pasuk back at the same height on screen */
-  let pendingAnchor = null, pendingOpen = null, pendingHaftOpen = null;
+  let pendingAnchor = null, pendingOpen = null, pendingHaftOpen = null, restoreSel = null;
   function restoreAnchor() {
     const a = pendingAnchor; pendingAnchor = null;
     const row = a && $(`#v-${a.s}-${a.c}-${a.v}`);
     if (row) window.scrollTo(0, row.getBoundingClientRect().top + window.scrollY - a.top);
+    if (restoreSel) { const r = restoreSel; restoreSel = null; markSelected(r.s, r.c, r.v); }
   }
   let suppressOpen = false;
   let pendingHaftChoice = null;
@@ -1277,18 +1356,21 @@
   function updateAliyahBtn(pos) {
     const btn = $("#aliyahBtn"); if (!btn) return;
     const isTorah = readerState && book(readerState.slug).section === "torah";
-    btn.hidden = !isTorah;
+    if (btn.hidden !== !isTorah) btn.hidden = !isTorah;
     if (!isTorah) { $("#topParsha").hidden = true; document.body.classList.remove("has-parsha"); return; }
     const lbl = $("#aliyahLabel");
     const st = pos && !pos.haft ? currentStop(pos) : null;
     const p = pos && pos.pid ? INDEX.parshiot.find((x) => x.id === pos.pid) : st ? st.p : null;
     const al = pos && pos.haft ? "הפטרה" : st && st.he ? st.he : "עליה";
-    lbl.textContent = al;
+    // only what changed is written: the bar is not redrawn on every scroll
+    if (lbl.textContent !== al) lbl.textContent = al;
     // Pages: the parsha you're in gets its own label on the top bar
     const tp = $("#topParsha"), showP = !!(PG && p);
-    tp.hidden = !showP; if (showP) tp.textContent = `פרשת ${p.he}`;
-    document.body.classList.toggle("has-parsha", showP);
-    btn.title = p ? `${pos && pos.haft ? "Haftarah" : st && st.en ? st.en : ""} · Parashat ${p.en} — jump to an aliyah` : "Jump to an aliyah";
+    if (tp.hidden !== !showP) tp.hidden = !showP;
+    if (showP && tp.textContent !== `פרשת ${p.he}`) tp.textContent = `פרשת ${p.he}`;
+    if (document.body.classList.contains("has-parsha") !== showP) document.body.classList.toggle("has-parsha", showP);
+    const title = p ? `${pos && pos.haft ? "Haftarah" : st && st.en ? st.en : ""} · Parashat ${p.en} — jump to an aliyah` : "Jump to an aliyah";
+    if (btn.title !== title) btn.title = title;
   }
   function openAliyahMenu() {
     renderAliyahMenu();
@@ -1348,6 +1430,26 @@
     suppressOpen = true;
     location.hash = r && r.view === "parsha" ? `#parsha-${st.p.id}-${st.c}-${st.v}` : chapterHash(st.slug, st.c, st.v);
   }
+
+  /* where you are on the screen, kept for this tab: if Safari reloads the page when you come back to it,
+     you're put back on the same pasuk at the same height */
+  function savePlace(row) {
+    try {
+      if (!row) { sessionStorage.removeItem("tanach:place"); return; }
+      const top = Math.round(row.getBoundingClientRect().top);
+      sessionStorage.setItem("tanach:place", JSON.stringify({ hash: location.hash, view: settings.view, s: row.dataset.s, c: +row.dataset.c, v: +row.dataset.v, top, sel: readerState && readerState.sel, t: Date.now() }));
+    } catch {}
+  }
+  function takePlace() {
+    try {
+      const p = JSON.parse(sessionStorage.getItem("tanach:place") || "null");
+      if (!p || p.view !== settings.view || p.view !== "scroll" || p.hash !== location.hash) return null;
+      return p;
+    } catch { return null; }
+  }
+  const savePlaceNow = () => { if (readerState && settings.view === "scroll" && !PG) { const r = topRow(); if (r) savePlace(r); } };
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") savePlaceNow(); });
+  window.addEventListener("pagehide", savePlaceNow);
 
   /* remember the pasuk at the top of the screen for "Continue reading" */
   function saveLast(pos) {
@@ -1588,7 +1690,7 @@
     if (!rows) {
       rows = alignCommentNow(heText, enText);
       ALIGN_MEMO.set(key, rows);
-      if (ALIGN_MEMO.size > 5000) ALIGN_MEMO.delete(ALIGN_MEMO.keys().next().value);
+      if (ALIGN_MEMO.size > 3000) ALIGN_MEMO.delete(ALIGN_MEMO.keys().next().value);
     }
     return rows.map((r) => ({ he: r.he.slice(), en: r.en.slice() }));
   }
@@ -1645,16 +1747,19 @@
       rows.map((rw, k) => `<div class="rline"><div class="r-en cu-en">${ens[k]}</div><div class="r-he cu-he">${rw.he.map(esc).join("<br>")}</div></div>`).join("");
   }
 
+  const commBmBtn = (cid, s, c, v, i) => `<button class="c-bm ${isCommBm(cid, s, c, v, i) ? "on" : ""}" type="button" aria-label="Bookmark this ${esc(commMeta(cid).en)}" title="Bookmark this comment">${iconBookmark}</button>`;
   function commentRow(cid, s, c, v, i, he, en) {
     const showEn = settings.rashiEn && en;
     if (showEn && settings.rashiLines) {
       return `<div class="rrow lines cu has-en" data-kind="comm" data-cid="${cid}" data-s="${s}" data-c="${c}" data-v="${v}" data-i="${i}">
         <button class="unit-copy c-copy" type="button" aria-label="Copy this comment" title="Copy this comment">${iconCopy}</button>
+        ${commBmBtn(cid, s, c, v, i)}
         ${linesHTML(he, en)}
       </div>`;
     }
     return `<div class="rrow cu ${showEn ? "has-en" : "no-en"}" data-kind="comm" data-cid="${cid}" data-s="${s}" data-c="${c}" data-v="${v}" data-i="${i}">
       <button class="unit-copy c-copy" type="button" aria-label="Copy this comment" title="Copy this comment">${iconCopy}</button>
+      ${commBmBtn(cid, s, c, v, i)}
       ${showEn ? `<div class="r-en cu-en">${en}</div>` : ""}
       <div class="r-he cu-he">${heComm(he)}</div>
     </div>`;
@@ -1725,12 +1830,22 @@
     const s = row.dataset.s, c = +row.dataset.c, v = +row.dataset.v;
     const bm = e.target.closest(".bm-btn");
     if (bm) { e.stopPropagation(); toggleBookmark(s, c, v, bm); return; }
+    const cbm = e.target.closest(".c-bm");
+    if (cbm) { e.stopPropagation(); const cr = cbm.closest(".rrow"); toggleCommBm(cr.dataset.cid, cr.dataset.s, +cr.dataset.c, +cr.dataset.v, +cr.dataset.i, cbm); return; }
     if (e.target.closest(".rashi-pill")) { toggleRashi(row); markSelected(s, c, v); return; }
     if (e.target.closest(".rdrop")) return;                        // reading / selecting inside Rashi
     if (window.getSelection && String(window.getSelection()).length > 1) return; // selecting text
     if (copyMode) return;                                          // taps in copy mode don't toggle
+    // a second tap on the selected pasuk lets it go (and closes its Rashi)
+    if (row.classList.contains("selected")) { clearSelected(); toggleRashi(row, false); return; }
     markSelected(s, c, v);
     toggleRashi(row);
+  }
+  function clearSelected() {
+    $$(".verse.selected").forEach((x) => x.classList.remove("selected"));
+    const st = readerState; if (!st) return;
+    const was = st.sel; st.sel = null;
+    if (was && st.r.view === "chapter") history.replaceState(null, "", chapterHash(st.slug, was.c));
   }
 
   function markSelected(s, c, v) {
@@ -1741,9 +1856,14 @@
     if (readerState && readerState.r.view === "chapter") history.replaceState(null, "", chapterHash(s, c, v));
     return row;
   }
+  /* opening a pasuk (a link, search, Continue reading, a bookmark): selected, at the top of the screen */
   function selectVerse(s, c, v, { scroll = false } = {}) {
     const row = markSelected(s, c, v); if (!row) return;
-    if (scroll) row.scrollIntoView({ block: "center" });
+    if (scroll) pasukToTop(row);
+  }
+  function pasukToTop(row) {
+    const top = $(".topbar").getBoundingClientRect().bottom + ($("#copybar").hidden ? 0 : $("#copybar").offsetHeight) + 10;
+    window.scrollTo(0, Math.max(0, Math.round(row.getBoundingClientRect().top + window.scrollY - top)));
   }
 
   function renderNotFound() {
@@ -1978,9 +2098,8 @@
   /* ───────── Picker ───────── */
   function setPicker(r) {
     const el = $("#pickerLabel");
-    if (!r) el.innerHTML = `Choose a sefer`;
-    else if (r.view === "chapter") el.innerHTML = `<span class="he">${esc(book(r.slug).he)} ${gematria(r.c)}</span>`;
-    else el.innerHTML = `<span class="he">פרשת ${esc(r.p.he)}</span>`;
+    const html = !r ? `Choose a sefer` : r.view === "chapter" ? `<span class="he">${esc(book(r.slug).he)} ${gematria(r.c)}</span>` : `<span class="he">פרשת ${esc(r.p.he)}</span>`;
+    if (el.dataset.html !== html) { el.innerHTML = html; el.dataset.html = html; }
   }
   function openPicker(slug) { openDialog("#pickerOverlay"); if (slug) showChapters(slug); else showBooks(); }
   function showBooks() {
@@ -2725,6 +2844,8 @@
     buildMarks();
     buildSedarim();
     OFF.init = initOffline();
+    const back = takePlace();
+    if (back) { pendingAnchor = { s: back.s, c: back.c, v: back.v, top: back.top }; suppressOpen = true; restoreSel = back.sel || null; }
     route();
   }
   boot();

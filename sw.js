@@ -1,9 +1,12 @@
-/* Tanach Reader — offline support.
-   The site itself (page, script, styles, icons, index): from the network when online, so updates
-   arrive; from the saved copy when offline or when the network is very slow.
+/* Tanach Reader — offline support and quick returns.
+   The site itself (page, script, styles, icons, index): the saved copy at once, refreshed from the network
+   in the background (an update is used from the next visit), so coming back to the site never waits on the
+   network.
    Downloaded texts and commentaries (data/…): from the offline copy first.
+   Other data the reader has opened lately: kept too (the last 60 files), served at once and refreshed in the
+   background.
    Fonts: kept once fetched. */
-const SHELL = "tanach-shell-v2", DATA = "tanach-data", FONTS = "tanach-fonts";
+const SHELL = "tanach-shell-v3", DATA = "tanach-data", RECENT = "tanach-recent", FONTS = "tanach-fonts";
 const SHELL_FILES = ["./", "index.html", "app.js", "styles.css", "favicon.svg", "apple-touch-icon.png", "icon-192.png", "icon-512.png", "manifest.webmanifest", "data/index.json", "data/manifest.json", "data/lex.json", "data/shabbat-il.json"];
 const BASE = new URL("./", self.location).pathname;
 
@@ -36,21 +39,33 @@ self.addEventListener("fetch", (e) => {
 
 async function fromData(req) {
   const hit = await caches.match(req.url, { ignoreSearch: true, cacheName: DATA });
-  return hit || fetch(req);
+  if (hit) return hit;
+  const recent = await caches.open(RECENT);
+  const key = req.url.split("?")[0];
+  const old = await recent.match(key);
+  const net = fetch(req).then(async (res) => {
+    if (res.ok && res.type === "basic") { await recent.put(key, res.clone()); trimRecent(recent); }
+    return res;
+  });
+  if (old) { net.catch(() => {}); return old; }
+  return net;
+}
+async function trimRecent(cache) {
+  const keys = await cache.keys();
+  for (let i = 0; i < keys.length - 60; i++) await cache.delete(keys[i]);   // oldest first
 }
 
 async function fromShell(req, rel) {
   const cache = await caches.open(SHELL);
   const key = req.mode === "navigate" || rel === "" || rel === "index.html" ? new URL("./", self.location).href : req.url;
   const cached = await cache.match(key, { ignoreSearch: true });
-  const net = fetch(req).then((res) => {
+  const net = fetch(req, { cache: "no-cache" }).then((res) => {
     if (res.ok && res.type === "basic") cache.put(key, res.clone());
     return res;
   });
   if (!cached) return net;
-  // online: the fresh copy; offline or a very slow network: the saved one
-  const slow = new Promise((r) => setTimeout(() => r(cached), 3500));
-  return Promise.race([net.catch(() => cached), slow]);
+  net.catch(() => {});
+  return cached;                                  // at once; the fresh copy is kept for next time
 }
 
 async function fromFonts(req) {

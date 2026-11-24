@@ -59,13 +59,15 @@ button { font: inherit; color: inherit; }
 .he-display { font-family: var(--f-he-display); direction: rtl; }
 
 /* ───────── Top bar ───────── */
+/* the top bar is fixed (not sticky) and solid (no backdrop blur): Safari on iPad redraws a sticky, blurred bar on
+   every programmatic scroll and every change in the page beneath it, which shows as flicker */
 .topbar {
-  position: sticky; top: 0; z-index: 30; height: var(--topbar-h);
+  position: fixed; top: 0; left: 0; right: 0; z-index: 30; height: var(--topbar-h);
   display: flex; align-items: center; gap: 12px; padding: 0 16px;
-  background: color-mix(in srgb, var(--paper) 88%, transparent);
-  backdrop-filter: saturate(1.2) blur(10px); -webkit-backdrop-filter: saturate(1.2) blur(10px);
+  background: var(--paper);
   border-bottom: 1px solid var(--rule);
 }
+body { padding-top: var(--topbar-h); }
 .brand { display: flex; align-items: baseline; gap: 8px; text-decoration: none; flex-shrink: 0; }
 .brand-he { font-family: var(--f-he-display); font-weight: 900; font-size: 1.5rem; color: var(--accent); line-height: 1; }
 .brand-en { font-family: var(--f-en); font-size: 1.1rem; }
@@ -959,3 +961,22 @@ a.wk-card:hover { border-color: var(--gold); box-shadow: 0 2px 8px rgba(60, 40, 
 .wk-links { display: flex; flex-wrap: wrap; gap: 8px; }
 .wk-links .chip { border: 1px solid var(--rule); background: var(--card, var(--paper)); color: var(--ink-2); border-radius: 999px; padding: 5px 12px; font-size: .86rem; text-decoration: none; }
 .wk-links .chip:hover { border-color: var(--accent); color: var(--accent); }
+
+/* a bookmark on each comment (Rashi dropdown), in the strip (Pages), and saved comments on Home */
+.rrow .c-bm { grid-area: gap; justify-self: center; align-self: start; width: 28px; height: 28px; margin-top: 1px; border: 0; border-radius: 7px;
+  background: transparent; color: var(--ink-3); opacity: .5; cursor: pointer; display: grid; place-items: center; padding: 0; }
+.rrow .c-bm:hover { opacity: .9; }
+.rrow .c-bm.on, .tx-bm.on { color: var(--accent); opacity: 1; }
+.rrow .c-bm.on svg path, .tx-bm.on svg path { fill: currentColor; }
+.rrow.no-en, .rrow.lines { padding-left: 30px; }
+.rrow.no-en .c-bm, .rrow.lines .c-bm { position: absolute; top: 8px; left: 0; }
+body.copy-mode .rrow .c-bm { display: none; }
+.rrow.flash { animation: rowflash 1.6s ease; }
+@keyframes rowflash { 0%, 35% { background: color-mix(in srgb, var(--gold) 26%, transparent); } 100% { background: transparent; } }
+.tx-bm { display: inline-flex; align-items: center; gap: 3px; margin-inline-start: 8px; padding: 1px 7px 1px 4px; border: 1px solid var(--rule);
+  border-radius: 999px; background: var(--paper); color: var(--ink-2); font: inherit; font-size: .68rem; letter-spacing: .04em; cursor: pointer; vertical-align: 1px; }
+.tx-bm svg { width: 12px; height: 12px; }
+.pcard.ccard .pc-comm { font-family: var(--f-rashi); font-size: 1.02rem; display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
+.rashi-plain .pcard.ccard .pc-comm { font-family: var(--f-he); }
+.pcard.ccard .pc-comm b { font-family: var(--f-he); color: var(--accent); }
+.pcard.ccard .pc-comm-en { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
