@@ -498,6 +498,7 @@
     else if (r.c === 1) idx = 0;
     else idx = items.findIndex((it) => it.type === "pasuk" && it.c === r.c);
     PG.idx = Math.max(0, idx);
+    app.textContent = "";
     document.body.classList.add("pages-mode");
     app.innerHTML = `
       <div class="pager" id="pager">
@@ -681,6 +682,9 @@
     PG.page = page === "last" ? PG.pages - 1 : Math.min(page || 0, PG.pages - 1);
     pagerMove(false);
     showPhrase(null);
+    // the next pasuk's phrase matching, done while you read this one (turning the page is then quicker)
+    const nx = PG.items[idx + 1], slugNow = PG.slug;
+    if (nx && nx.type === "pasuk") idle(() => { if (PG && PG.slug === slugNow) warmPasuk(slugNow, nx.c, nx.v); }, 2000);
     // where we are: address, picker, aliyah button, Continue reading
     const it = PG.items[idx];
     let pos;
@@ -978,17 +982,42 @@
     fillSefer(st, c0);
     preloadPagesData(slug);
   }
-  /* while reading in Scroll, quietly fetch what Pages needs for this sefer, so switching never waits */
+  /* while reading in Scroll, quietly fetch what Pages needs for this sefer, so switching never waits:
+     soon after the sefer opens, one file at a time in idle moments — the Hebrew of each commentary first
+     (what a page shows), then the English and the introductions */
+  const idle = (fn, timeout = 1500) => (window.requestIdleCallback ? requestIdleCallback(fn, { timeout }) : setTimeout(fn, 60));
   function preloadPagesData(slug) {
     const c = navigator.connection; if (c && (c.saveData || /2g/.test(c.effectiveType || ""))) return;
     setTimeout(() => {
       if (!readerState || readerState.slug !== slug) return;
       fontsReady("pages");
-      for (const cm of pgComms(slug)) {
-        loadComm(cm.id, slug).catch(() => {}); if (cm.enDir) loadCommEn(cm.id, slug).catch(() => {});
-        if (cm.introDir && INDEX.intros && (INDEX.intros[cm.id] || []).includes(slug)) fetchJSON(cm.introDir + slug + ".json").catch(() => {});
-      }
-    }, 2500);
+      const comms = pgComms(slug);
+      const jobs = [() => loadLex(), ...comms.map((cm) => () => loadComm(cm.id, slug)),
+        ...comms.filter((cm) => cm.enDir).map((cm) => () => loadCommEn(cm.id, slug)),
+        ...comms.filter((cm) => cm.introDir && INDEX.intros && (INDEX.intros[cm.id] || []).includes(slug)).map((cm) => () => fetchJSON(cm.introDir + slug + ".json"))];
+      const next = () => {
+        if (!jobs.length || !readerState || readerState.slug !== slug) { warmTop(); return; }
+        const job = jobs.shift();
+        idle(() => Promise.resolve(job()).catch(() => {}).then(next));
+      };
+      next();
+    }, 700);
+  }
+  /* the phrase matching of a pasuk's commentaries, done before it is needed (it is remembered) */
+  let warmKey = "";
+  function warmPasuk(s, c, v) {
+    if (!LEX || !s || !c || !v) return false;
+    const comms = pgComms(s);
+    if (!comms.every((cm) => resolved.has(commUrl(cm.id, s)) && (!cm.enDir || resolved.has(commEnUrl(cm.id, s))))) return false;
+    try { commentaryBody(s, c, v, []); } catch { return false; }
+    return true;
+  }
+  function warmTop() {
+    const st = readerState; if (!st || settings.view === "pages") return;
+    const row = (st.sel && $(`#v-${st.sel.s}-${st.sel.c}-${st.sel.v}`)) || topRow(); if (!row) return;
+    const k = `${row.dataset.s}:${row.dataset.c}:${row.dataset.v}`;
+    if (k === warmKey) return;
+    idle(() => { if (warmPasuk(row.dataset.s, +row.dataset.c, +row.dataset.v)) warmKey = k; }, 3000);   // remembered only once done
   }
   function afterInsert(sections, paintRashi = true) {
     const st = readerState; if (!st) return;
@@ -1088,6 +1117,7 @@
     const pos = { s: row.dataset.s, c: +row.dataset.c, v: +row.dataset.v, haft: !!hs };
     if (hs) pos.pid = hs.dataset.p;
     st.lastPos = pos; saveLast(pos); updateAliyahBtn(pos);
+    warmTop();
     if (st.r.view === "chapter" && !pos.haft && (force || pos.c !== st.curC)) {
       st.curC = pos.c; current.c = pos.c;
       setPicker({ view: "chapter", slug: st.slug, c: pos.c });
@@ -1549,7 +1579,18 @@
     return out;
   }
   const lenOk = (hp, ep, r, tol) => { const hL = hp.reduce((t, x) => t + heLen(x), 0), eL = ep.reduce((t, x) => t + unB(x).length, 0); return Math.abs(Math.log((eL + 6) / (r * hL + 6))) < tol; };
+  const ALIGN_MEMO = new Map();
   function alignComment(heText, enText) {
+    const key = `${LEX_W}|${LEX ? 1 : 0}|${heText}\u0001${enText || ""}`;
+    let rows = ALIGN_MEMO.get(key);
+    if (!rows) {
+      rows = alignCommentNow(heText, enText);
+      ALIGN_MEMO.set(key, rows);
+      if (ALIGN_MEMO.size > 5000) ALIGN_MEMO.delete(ALIGN_MEMO.keys().next().value);
+    }
+    return rows.map((r) => ({ he: r.he.slice(), en: r.en.slice() }));
+  }
+  function alignCommentNow(heText, enText) {
     const hp = splitPhrases(heText, "he");
     if (!enText) return hp.map((h) => ({ he: [h], en: [] }));
     const ep = splitPhrases(enText, "en");
@@ -2163,7 +2204,8 @@
   }
   /* Scroll ⇄ Pages (see morphLayout for how the change is shown) */
   let quietShow = false, layoutSwitch = null;   // the running Scroll ⇄ Pages switch (a promise)
-  function switchLayout() {
+  /* the pasuk a switch from Scroll opens on */
+  function switchTarget() {
     let pos = readerState.lastPos || { s: readerState.slug, c: current.c || 1, v: 1 };
     // a pasuk you've just picked (highlighted) and can see wins over the one at the top of the screen
     const sel = readerState.sel, selRow = sel && !PG && $(`#v-${sel.s}-${sel.c}-${sel.v}`);
@@ -2171,6 +2213,11 @@
       const rc = selRow.getBoundingClientRect();
       if (rc.bottom > $(".topbar").getBoundingClientRect().bottom + 10 && rc.top < innerHeight - 40) pos = { s: sel.s, c: sel.c, v: sel.v };
     }
+    return pos;
+  }
+  let switchPos = null;
+  function switchLayout() {
+    const pos = switchPos || switchTarget(); switchPos = null;
     const slug = readerState.slug;
     if (settings.view === "pages") {
       // Scroll → Pages: open on the pasuk at the top of the screen (or its haftarah page)
@@ -2243,7 +2290,7 @@
           await frames(1);
         } else if (!veilUp) v.style.visibility = "hidden";
         res();
-      }, ms + 30);
+      }, ms + 16);
     });
   }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -2263,21 +2310,22 @@
         if (settings.view === "pages" && c.introDir && INDEX.intros && (INDEX.intros[c.id] || []).includes(slug)) jobs.push(fetchJSON(c.introDir + slug + ".json"));
       }
     }
-    const slow = setTimeout(() => toast("Loading…"), 350);
-    await Promise.allSettled(jobs); clearTimeout(slow);
-    mark("data");
     let done; layoutSwitch = new Promise((r) => (done = r));
     quietShow = true;
+    const slow = setTimeout(() => toast("Loading…"), 450);
     try {
-      await veilTo(true, 110);
+      // the veil rises straight away; the data (usually already in memory) is checked meanwhile
+      const pos = settings.view === "pages" && readerState && !PG ? (switchPos = switchTarget()) : null;
+      await Promise.all([veilTo(true, 60), Promise.allSettled(jobs).then(() => { mark("data"); if (pos && !pos.haft && warmKey !== `${pos.s}:${pos.c}:${pos.v}`) warmPasuk(pos.s, pos.c, pos.v); })]);
+      clearTimeout(slow);
       mark("hidden");
       await update();
       void $("#app").offsetHeight;       // laid out and scrolled into place before the veil lifts
       await frames(2);                    // …and painted
       mark("updated");
     } finally {
-      quietShow = false;
-      await veilTo(false, 190);
+      quietShow = false; clearTimeout(slow);
+      await veilTo(false, 130);
       mark("done"); done(); layoutSwitch = null;
     }
   }
