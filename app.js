@@ -2106,11 +2106,16 @@
     $("#pickerTitle").textContent = "Choose a sefer";
     $("#pickerBack").hidden = true;
     const cur = current && (current.slug || (current.p && current.p.range[0]));
-    $("#pickerBody").innerHTML = `<div class="picker-sections">${INDEX.sections.map((sec) => `
-      <div><div class="col-head"><span class="en">${esc(sec.en)}</span><span class="he">${esc(sec.he)}</span></div>
+    // Torah, Nevi'im, Ketuvim side by side; the short Sefarim Chitzonim list sits under Torah (on a phone, last)
+    const secHTML = (sec, order) => `<div class="pk-sec" style="order:${order}"><div class="col-head"><span class="en">${esc(sec.en)}</span><span class="he">${esc(sec.he)}</span></div>
         ${sec.groups.flatMap((g) => g.books).map((s) => `<button type="button" class="lrow ${s === cur ? "current" : ""}" data-book="${s}">
           <span class="en">${esc(book(s).en)}</span><span class="he">${esc(book(s).he)}</span></button>`).join("")}
-      </div>`).join("")}</div>`;
+      </div>`;
+    const secs = INDEX.sections, byId = (id) => secs.find((x) => x.id === id);
+    const extra = secs.filter((x) => !["torah", "neviim", "ketuvim"].includes(x.id));
+    const cols = [[byId("torah"), ...extra], [byId("neviim")], [byId("ketuvim")]].map((col) => col.filter(Boolean));
+    $("#pickerBody").innerHTML = `<div class="picker-sections">${cols.map((col) =>
+      `<div class="pk-col">${col.map((sec) => secHTML(sec, secs.indexOf(sec))).join("")}</div>`).join("")}</div>`;
     $$("#pickerBody [data-book]").forEach((b) => b.addEventListener("click", () => showChapters(b.dataset.book)));
   }
   function showChapters(slug) {

@@ -179,7 +179,7 @@ body { padding-top: var(--topbar-h); }
 
 /* Sefarim read right-to-left: the first sefer is rightmost */
 .pgrid, .brows, .sgrid, .picker-sections { direction: rtl; }
-.pcol, .scol, .lrow, .col-head, .group-label, .picker-sections > div { direction: ltr; }
+.pcol, .scol, .lrow, .col-head, .group-label { direction: ltr; }
 .pgrid { display: grid; gap: 14px 18px; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
 .col-head.as-btn { width: 100%; background: none; border-top: 0; border-left: 0; border-right: 0; cursor: pointer; font: inherit; text-align: left; }
 .col-head.as-btn:hover .he { color: var(--accent); }
@@ -611,7 +611,14 @@ body.copy-mode .comment, body.copy-mode .ir-c { padding-left: 26px; }
 .dialog-head h2 { flex: 1; margin: 0; font-size: 1.05rem; font-weight: 600; }
 .dialog-head h2 .he { font-size: 1.3rem; margin-inline-start: .3em; }
 .dialog-body { overflow-y: auto; padding: 14px 18px 22px; }
-.picker-sections { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+.picker-sections { display: grid; gap: 18px; grid-template-columns: 1fr; }
+.pk-col { display: contents; }                    /* phone: one list — Torah, Nevi'im, Ketuvim, Sefarim Chitzonim */
+.pk-sec { direction: ltr; }
+@media (min-width: 700px) {
+  .picker-sections { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .pk-col { display: flex; flex-direction: column; gap: 22px; }   /* the Chitzonim under Torah */
+  .pk-col .pk-sec { order: 0 !important; }
+}
 .picker-sections .lrow { padding: 4px 4px; }
 .ch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(48px, 1fr)); gap: 6px; direction: rtl; }
 .ch-grid a {
