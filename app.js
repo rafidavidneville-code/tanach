@@ -203,8 +203,11 @@
   const chapterHash = (slug, c, v) => `#${slug}-${c}${v ? "-" + v : ""}`;
 
   let current = null;
+  let routeTok = 0, routedOnce = false;
   async function route() {
     if (!INDEX) return;                     // index still loading: boot() routes when it's ready
+    const tok = ++routeTok;
+    if (veilUp && !layoutSwitch) veilTo(false, 120);   // a change of view cut short by this one
     const r = parseRoute(location.hash);
     closeAllDialogs();
     if (settings.view === "pages" && r.view === "parsha") {
@@ -231,13 +234,19 @@
       jumpWithinSefer(r.c, r.v);
       return;
     }
+    const veil = routedOnce && !quietShow && !layoutSwitch;
+    routedOnce = true;
+    if (veil) { await veilTo(true, 90); if (tok !== routeTok) return; }
     current = r;
     readerState = null;
     $("#aliyahBtn").hidden = true; $("#topParsha").hidden = true; document.body.classList.remove("has-parsha");
+    let work;
     if (r.view === "home") renderHome();
     else if (r.view === "offline") renderOffline();
-    else if (r.view === "chapter" || r.view === "parsha") await renderReader(r);
+    else if (r.view === "chapter" || r.view === "parsha") work = renderReader(r);
     else renderNotFound();
+    if (veil) { if (work) await Promise.race([work, sleep(900)]); await frames(2); if (tok === routeTok) await veilTo(false, 170); }
+    else if (work) await work;
   }
 
   /* ───────── Home ───────── */
@@ -888,13 +897,16 @@
     const haftJobs = $$(".haftarah", app).map((el) => fillHaftarah(el, el.classList.contains("full")));
     preloadHaftarot();
     $(".verses", app).addEventListener("click", onVerseClick);
+    const target = r.v ? $(`#v-${slug}-${r.c}-${r.v}`) : null;
+    // as in a sefer: in place in the first frame, kept there while Rashi is painted
+    let spot = null;
+    if (!pendingAnchor && !r.haft) { if (target) selectVerse(slug, r.c, r.v, { scroll: true }); else window.scrollTo(0, 0); spot = captureSpot(); }
     await decorateCommentary();
     preloadForCopy();
-    const target = r.v ? $(`#v-${slug}-${r.c}-${r.v}`) : null;
     if (pendingAnchor) restoreAnchor();
-    else if (target) { selectVerse(slug, r.c, r.v, { scroll: true }); target.classList.add("flash"); }
+    else if (target) { restoreSpot(spot); target.classList.add("flash"); }
     else if (r.haft) { await Promise.all(haftJobs); const h = $(`#haft-${r.p.id}`); if (h) h.scrollIntoView({ block: "start" }); }
-    else window.scrollTo(0, 0);
+    else restoreSpot(spot);
     trackPosition(true);
   }
 
@@ -939,6 +951,18 @@
     st.lo = Math.max(1, c0 - 1); st.hi = Math.min(n, c0 + 1);
     let html = ""; for (let c = st.lo; c <= st.hi; c++) html += perekHTML(slug, c, text, r);
     body.innerHTML = html;
+    const target = r.v ? $(`#v-${slug}-${r.c}-${r.v}`) : null;
+    const place = () => {
+      if (target) { selectVerse(slug, r.c, r.v, { scroll: true }); target.classList.add("flash"); }
+      else if (c0 > 1) $(`#perek-${slug}-${c0}`).scrollIntoView({ block: "start" });
+      else window.scrollTo(0, 0);
+    };
+    // the page is put in place in the same frame its text arrives, so it is never seen at the top of the
+    // sefer first; painting Rashi (which can change heights above) then keeps that place — Safari has no
+    // scroll anchoring to do it for us
+    const early = !pendingAnchor && !pendingHaftOpen;
+    let spot = null;
+    if (early) { place(); spot = captureSpot(); }
     await decorateCommentary();            // loads Rashi once for the sefer, paints these perakim
     if (readerState !== st) return;
     afterInsert($$(".perek", body), false);
@@ -947,11 +971,9 @@
       if (el) { el.classList.add("full"); el.classList.remove("card"); await fillHaftarah(el, true); if (readerState !== st) return; st.rowsDirty = true; }
     }
     preloadForCopy();
-    const target = r.v ? $(`#v-${slug}-${r.c}-${r.v}`) : null;
     if (pendingAnchor) restoreAnchor();
-    else if (target) { selectVerse(slug, r.c, r.v, { scroll: true }); target.classList.add("flash"); }
-    else if (c0 > 1) $(`#perek-${slug}-${c0}`).scrollIntoView({ block: "start" });
-    else window.scrollTo(0, 0);
+    else if (early) restoreSpot(spot);
+    else place();
     trackPosition(true);
     fillSefer(st, c0);
     preloadPagesData(slug);
@@ -2195,12 +2217,45 @@
      the page fades out, the layout is swapped while nothing shows, and the new one fades in. One layout
      never shows through the other (a cross-fade of two pages of text looks like a flicker) and nothing on
      the page is transformed (a transform would move the fixed page controls for the length of the fade). */
+  /* Changing view (Home ⇄ a sefer, Scroll ⇄ Pages): a plain sheet in the page's colour fades in over the
+     page, the new view is drawn and scrolled into place under it, and the sheet fades away. The text is
+     never faded itself: fading a whole page of text makes the browser (Safari above all) repaint it into
+     a layer of its own and back, which flashes; one view showing through the other looks like a flicker;
+     and a page drawn first and moved after is a jump. The parts of the top bar that change fade with it. */
+  const reduceMotion = () => !!(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches);
+  let veilUp = false;
+  function veilTo(on, ms) {
+    let v = document.getElementById("veil");
+    if (!v) { v = document.createElement("div"); v.id = "veil"; v.setAttribute("aria-hidden", "true"); document.body.append(v); }
+    const nav = $(".nav-center");
+    if (reduceMotion()) ms = 0;
+    veilUp = on;
+    return new Promise((res) => {
+      const tr = ms ? `opacity ${ms}ms ${on ? "ease-in" : "ease-out"}` : "none";
+      v.style.transition = tr; if (nav) nav.style.transition = tr;
+      if (on) v.style.visibility = "visible";
+      void v.offsetWidth;
+      v.style.opacity = on ? "1" : "0"; if (nav) nav.style.opacity = on ? "0" : "";
+      setTimeout(async () => {
+        if (on) {   // fully up (a busy page can run a fade late) and that frame shown, before anything changes under it
+          const t0 = performance.now();
+          while (parseFloat(getComputedStyle(v).opacity) < .99 && performance.now() - t0 < 400) await frames(1);
+          await frames(1);
+        } else if (!veilUp) v.style.visibility = "hidden";
+        res();
+      }, ms + 30);
+    });
+  }
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const frames = (n) => new Promise((r) => { const f = () => (--n <= 0 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
+  /* Scroll ⇄ Pages: everything the other layout needs is loaded first (texts, commentaries, fonts), so the
+     swap under the veil is instant */
   async function morphLayout(update) {
     const mark = (n) => { try { performance.mark("layout-" + n); } catch {} };
     mark("start");
     const slug = readerState && readerState.slug;
     const jobs = [fontsReady(settings.view === "pages" ? "pages" : "scroll")];
-    if (slug) {   // have the data in memory, so the swap itself is instant
+    if (slug) {
       jobs.push(loadText(slug), loadLex());
       const comms = settings.view === "pages" ? pgComms(slug) : COMMENTARIES.filter((c) => c.id === ((readerState && readerState.tab) || "rashi") && avail(c, slug));
       for (const c of comms) {
@@ -2211,26 +2266,18 @@
     const slow = setTimeout(() => toast("Loading…"), 350);
     await Promise.allSettled(jobs); clearTimeout(slow);
     mark("data");
-    const app = $("#app");
-    const reduce = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const fade = (to, ms) => new Promise((r) => {
-      if (reduce) { app.style.opacity = to ? "" : "0"; return r(); }
-      app.style.transition = `opacity ${ms}ms ${to ? "ease-out" : "ease-in"}`;
-      app.style.opacity = String(to);
-      setTimeout(r, ms + 20);
-    });
     let done; layoutSwitch = new Promise((r) => (done = r));
     quietShow = true;
     try {
-      await fade(0, 110);
+      await veilTo(true, 110);
       mark("hidden");
       await update();
-      void app.offsetHeight;            // laid out (and scrolled into place) before it shows
+      void $("#app").offsetHeight;       // laid out and scrolled into place before the veil lifts
+      await frames(2);                    // …and painted
       mark("updated");
     } finally {
       quietShow = false;
-      await fade(1, 190);
-      app.style.transition = ""; app.style.opacity = "";
+      await veilTo(false, 190);
       mark("done"); done(); layoutSwitch = null;
     }
   }

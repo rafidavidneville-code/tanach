@@ -895,7 +895,8 @@ body.pages-mode .site-footer { display: none; }
   .brand-he { font-size: 1.3rem; }
 }
 
-/* Scroll ⇄ Pages switch: a fade out and in, done from app.js (morphLayout) */
+/* changing view: a sheet in the page colour fades over the page and away (veilTo in app.js) */
+#veil { position: fixed; inset: 0; z-index: 28; background: var(--paper); opacity: 0; visibility: hidden; pointer-events: none; }
 
 /* ───────── Offline page ───────── */
 .hero-link { display: inline-flex; align-items: center; gap: 6px; margin-top: 12px; padding: 6px 14px; border: 1px solid var(--rule); border-radius: 999px; color: var(--accent); text-decoration: none; font-size: .9rem; background: var(--card, transparent); }
