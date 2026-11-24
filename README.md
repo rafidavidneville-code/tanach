@@ -15,3 +15,8 @@ A static site: open `index.html` through any web server. All data is in `data/`;
 - Beit HaLevi al HaTorah: Hebrew — Warsaw 1884, via Sefaria; placed on pesukim with Sefaria's links
 - Aliyot and haftarot: @hebcal/leyning (BSD-2)
 - Sedarim: MAM-parsed (CC-BY-SA)
+
+## Sefarim Chitzonim
+- Makabim I and II, Hebrew: Isaac Seckel Fränkel, Ketuvim Acharonim (1830), public domain — via Sefaria
+- Makabim I, English: Brenton's Septuagint, Wikisource edition (CC-BY-SA), as divided by Sefaria to Fränkel's verses; names adapted (the adapted text is CC-BY-SA too)
+- Makabim II, English: Brenton's Septuagint (1851, public domain; eBible corpus) fitted to Fränkel's verses, and the Sefaria Community Translation (CC0) where it has the verse

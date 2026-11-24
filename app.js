@@ -104,6 +104,8 @@
 
   /* ───────── Data ───────── */
   let INDEX = null, ORDER = [];
+  const canon = (slug) => (book(slug).section === "chitzonim" ? "chitzonim" : "tanach");
+  const nbBook = (slug, d) => { const s = ORDER[ORDER.indexOf(slug) + d]; return s && canon(s) === canon(slug) ? s : null; };
   const cache = new Map();      // url → promise
   const resolved = new Map();   // url → data (sync access for copy)
   function fetchJSON(url) {
@@ -417,8 +419,8 @@
     }
     const bi = ORDER.indexOf(r.slug); const b = book(r.slug);
     let prev = null, next = null;
-    if (r.c > 1) prev = [r.slug, r.c - 1]; else if (bi > 0) { const s = ORDER[bi - 1]; prev = [s, book(s).verses.length]; }
-    if (r.c < b.verses.length) next = [r.slug, r.c + 1]; else if (bi < ORDER.length - 1) next = [ORDER[bi + 1], 1];
+    if (r.c > 1) prev = [r.slug, r.c - 1]; else if (nbBook(r.slug, -1)) { const s = nbBook(r.slug, -1); prev = [s, book(s).verses.length]; }
+    if (r.c < b.verses.length) next = [r.slug, r.c + 1]; else if (nbBook(r.slug, 1)) next = [nbBook(r.slug, 1), 1];
     const mk = (x) => x && { hash: chapterHash(x[0], x[1]), en: refEn(x[0], x[1]), he: refHe(x[0], x[1]) };
     return { prev: mk(prev), next: mk(next) };
   }
@@ -667,8 +669,8 @@
       : `${b.he} ${plainGem(it.c)}:${plainGem(it.v)}`;
     $("#pgCount").textContent = PG.pages > 1 ? `${PG.page + 1} / ${PG.pages}` : "";
     const bi = ORDER.indexOf(PG.slug);
-    $$(".pg-btn[data-go='-1']").forEach((x) => (x.disabled = PG.idx === 0 && PG.page === 0 && bi === 0));
-    $$(".pg-btn[data-go='1']").forEach((x) => (x.disabled = PG.idx === PG.items.length - 1 && PG.page === PG.pages - 1 && bi === ORDER.length - 1));
+    $$(".pg-btn[data-go='-1']").forEach((x) => (x.disabled = PG.idx === 0 && PG.page === 0 && !nbBook(PG.slug, -1)));
+    $$(".pg-btn[data-go='1']").forEach((x) => (x.disabled = PG.idx === PG.items.length - 1 && PG.page === PG.pages - 1 && !nbBook(PG.slug, 1)));
   }
   function pagerShow(idx, page, dir = 1) {
     PG.idx = idx; PG.active = null;
@@ -715,11 +717,11 @@
     if (dir > 0) {
       if (PG.page < PG.pages - 1) { PG.page++; pagerMove(); }
       else if (PG.idx < PG.items.length - 1) pagerShow(PG.idx + 1, 0);
-      else if (bi < ORDER.length - 1) location.hash = chapterHash(ORDER[bi + 1], 1);                 // on into the next sefer
+      else if (nbBook(PG.slug, 1)) location.hash = chapterHash(nbBook(PG.slug, 1), 1);               // on into the next sefer
     } else {
       if (PG.page > 0) { PG.page--; pagerMove(); }
       else if (PG.idx > 0) pagerShow(PG.idx - 1, "last", -1);
-      else if (bi > 0) { const pb = book(ORDER[bi - 1]), lc = pb.verses.length; location.hash = chapterHash(ORDER[bi - 1], lc, pb.verses[lc - 1]); }
+      else if (nbBook(PG.slug, -1)) { const ps = nbBook(PG.slug, -1), pb = book(ps), lc = pb.verses.length; location.hash = chapterHash(ps, lc, pb.verses[lc - 1]); }
     }
   }
   function pagerGoTo(c, v) {
@@ -927,7 +929,7 @@
   async function renderSefer(r, text) {
     const app = $("#app"), slug = r.slug, b = book(slug), n = b.verses.length;
     const sec = INDEX.sections.find((s) => s.id === b.section);
-    const bi = ORDER.indexOf(slug), prevB = ORDER[bi - 1], nextB = ORDER[bi + 1];
+    const prevB = nbBook(slug, -1), nextB = nbBook(slug, 1);
     document.title = `${b.en} — Tanach Reader`;
     const total = b.verses.reduce((x, y) => x + y, 0);
     app.innerHTML = `
@@ -2106,6 +2108,22 @@
         const vv = v && v <= b.verses[c - 1] ? v : null;
         res.unshift({ hash: chapterHash(s, c, vv), en: refEn(s, c, vv), he: refHe(s, c, vv), t: vv ? "Pasuk" : "Perek" });
       } else res.push({ hash: chapterHash(s, 1), en: b.en, he: b.he, t: "Sefer", book: s });
+    }
+    // a Hebrew name that ends in its number (שמואל א, מקבים ב, דברי הימים א) followed by a perek: that sefer first
+    if (/[א-ת]/.test(q)) {
+      const nq = q.replace(/["״׳']/g, "").replace(/\s+/g, " ").trim();
+      for (const [s, b] of Object.entries(INDEX.books)) {
+        const bh = b.he.replace(/["״׳']/g, "");
+        if (!/ [אב]$/.test(bh) || !nq.startsWith(bh + " ")) continue;
+        const mm = nq.slice(bh.length + 1).match(/^(\d+|[א-ת]{1,4})(?:\s*[:., ]\s*(\d+|[א-ת]{1,4}))?$/);
+        if (!mm) continue;
+        const cc = num(mm[1]), vv0 = num(mm[2]);
+        if (!cc || cc > b.verses.length) continue;
+        const vv = vv0 && vv0 <= b.verses[cc - 1] ? vv0 : null;
+        const hash = chapterHash(s, cc, vv);
+        for (let i = res.length - 1; i >= 0; i--) if (res[i].hash === hash) res.splice(i, 1);
+        res.unshift({ hash, en: refEn(s, cc, vv), he: refHe(s, cc, vv), t: vv ? "Pasuk" : "Perek" });
+      }
     }
     return res.slice(0, 10);
   }
