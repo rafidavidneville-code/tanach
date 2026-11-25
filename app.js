@@ -12,10 +12,12 @@
   /* ───────── Commentaries registry (add more here later) ───────── */
   const COMMENTARIES = [
     { id: "rashi", he: "רש״י", en: "Rashi", dir: "data/rashi/", enDir: "data/rashi-en/" },
+    { id: "ibnezra", he: "אבן עזרא", heIntro: "הקדמת אבן עזרא", en: "Ibn Ezra", dir: "data/ibnezra/", enDir: "data/ibnezra-en/", introDir: "data/ibnezra-intro/", note: "Torah and much of Nach" },
     { id: "ramban", he: "רמב״ן", en: "Ramban", dir: "data/ramban/", enDir: "data/ramban-en/", introDir: "data/ramban-intro/", enSrc: "Chavel" },
     { id: "bachya", he: "רבנו בחיי", heIntro: "הקדמת רבנו בחיי", en: "Rabbeinu Bachya", dir: "data/bachya/", enDir: "data/bachya-en/", introDir: "data/bachya-intro/", enSrc: "Munk", note: "Torah" },
     { id: "sforno", he: "ספורנו", heIntro: "הקדמת הספורנו", en: "Sforno", dir: "data/sforno/", enDir: "data/sforno-en/", introDir: "data/sforno-intro/", enSrc: "Munk", note: "Torah and Shir Hashirim" },
     { id: "kliyakar", he: "כלי יקר", heIntro: "הקדמת כלי יקר", en: "Kli Yakar", dir: "data/kliyakar/", enDir: "data/kliyakar-en/", introDir: "data/kliyakar-intro/", note: "Torah" },
+    { id: "orhachaim", he: "אור החיים", heIntro: "הקדמת אור החיים", en: "Or HaChaim", dir: "data/orhachaim/", enDir: "data/orhachaim-en/", introDir: "data/orhachaim-intro/", enSrc: "Munk", note: "Torah" },
     { id: "beishalevi", he: "בית הלוי", heIntro: "הקדמת בית הלוי", en: "Beit HaLevi", dir: "data/beishalevi/", enDir: "data/beishalevi-en/", introDir: "data/beishalevi-intro/", note: "Bereshit and Shemot" },
   ];
   const introName = (c) => c.heIntro || `הקדמת ה${c.he}`;
@@ -45,7 +47,8 @@
     mode: "side", nikkud: true, taamim: true, theme: "paper",
     rashiScript: true, rashiEn: true, rashiOpen: false, rashiLines: false, notes: true, copyFmt: "both",
     maftir: true, weekday: false, haftarah: true, haftCustom: "a", petuchot: true, sedarim: true, view: "scroll",
-    pg_rashi: true, pg_ramban: true, pg_bachya: true, pg_sforno: true, pg_kliyakar: true, pg_beishalevi: true, pg_order: ["rashi", "ramban", "bachya", "sforno", "kliyakar", "beishalevi"],
+    pg_rashi: true, pg_ibnezra: true, pg_ramban: true, pg_bachya: true, pg_sforno: true, pg_kliyakar: true, pg_orhachaim: true, pg_beishalevi: true,
+    pg_order: ["rashi", "ibnezra", "ramban", "bachya", "sforno", "kliyakar", "orhachaim", "beishalevi"],
   };
   const settings = Object.assign({}, DEFAULTS, store.get("settings", {}));
   if (settings.inlineRashi) settings.rashiOpen = true;
@@ -265,7 +268,10 @@
     else if (r.view === "offline") renderOffline();
     else if (r.view === "chapter" || r.view === "parsha") work = renderReader(r);
     else renderNotFound();
-    if (veil) { if (work) await Promise.race([work, sleep(900)]); await frames(2); if (tok === routeTok) await veilTo(false, 170); }
+    if (veil) {
+      if (work) await Promise.all([Promise.race([work, sleep(900)]), fontsReady(settings.view === "pages" ? "pages" : "scroll", 900)]);
+      await frames(2); if (tok === routeTok) await veilTo(false, 170);
+    }
     else if (work) await work;
   }
 
@@ -1183,20 +1189,54 @@
     }
     /* run something that changes sizes above where you're reading, keeping your place */
     function keep(fn) {
-      const row = topRow(), t0 = row ? row.getBoundingClientRect().top : 0;
+      if (!anc || !anc.row.isConnected) noteAnchor();
+      const row = anc ? anc.row : topRow(), t0 = anc ? anc.doc - window.scrollY : row ? row.getBoundingClientRect().top : 0;
       fn();
       if (row && row.isConnected) absorb(row.getBoundingClientRect().top - t0);
-      rebase();
+      rebase(); arm();
     }
-    /* after a change of sizes that has already been made up for: the sizes of the perakim that are drawn are the
-       new baseline (a skipped perek keeps its size, and isn't measured — in Safari, measuring a skipped perek just
-       after a setting changed makes it lay the whole perek out). Safari can report a size change a frame or two
-       later than it happened; with the baseline per perek, a late report isn't corrected a second time. */
+    /* after the page was put where it should be (by us, or by you scrolling): where the pasuk you're reading is now
+       is where it stays. Perakim that are drawn have sizes known for this layout. (Skipped perakim aren't measured:
+       in Safari, measuring one just after a setting changed makes it lay the whole perek out.) */
     function rebase() {
       const b = body(); if (!b) return;
-      for (const P of b.children) if (drawn(P)) { P._h = P.getBoundingClientRect().height; P._k = gen; }
+      for (const P of b.children) if (drawn(P)) P._k = gen;
+      noteAnchor();
       soon(400);                          // a jump or a change can leave perakim above whose size isn't known
     }
+    /* THE ANCHOR — the pasuk at the reading line and where it is on the screen. Whatever changes size above it
+       (a perek the browser draws for the first time, a font arriving, Rashi painted in, an aliyah heading), the page
+       is put back so that pasuk is where it was, until you scroll. Checked when the browser reports a size change
+       (before it paints), and on each frame for a while after anything happens (Safari reports some changes a frame
+       late). */
+    let anc = null;
+    function noteAnchor() {
+      anc = null;
+      const b = body(); if (!b) return;
+      // only perakim that are drawn are measured (a skipped one can cost Safari a whole layout of it)
+      const L = line() + 14;
+      let P = null;
+      for (const Q of b.children) {
+        if (!drawn(Q)) continue;
+        const r = Q.getBoundingClientRect();
+        if (r.bottom > L) { if (r.top <= L) P = Q; break; }
+      }
+      if (!P) {          // just jumped somewhere the browser hasn't drawn yet
+        const row = topRow(); if (row && row.closest(".perek")) anc = { row, P: row.closest(".perek"), doc: row.getBoundingClientRect().top + window.scrollY };
+        return;
+      }
+      const rs = P.querySelectorAll(".verse");
+      let a = 0, z = rs.length - 1, k = -1;
+      while (a <= z) { const m = (a + z) >> 1; if (rs[m].getBoundingClientRect().bottom > L) { k = m; z = m - 1; } else a = m + 1; }
+      if (k < 0) return;
+      anc = { row: rs[k], P, doc: rs[k].getBoundingClientRect().top + window.scrollY };
+      // what's in this perek is watched too: a pasuk above yours can change height without the perek doing so
+      if (ro && watched !== P) {
+        if (watched) for (const c of watched.children) ro.unobserve(c);
+        watched = P; for (const c of P.children) ro.observe(c);
+      }
+    }
+    let watched = null;
     function observe(list) { if (ro && body()) for (const P of list) if (P.classList.contains("cv")) ro.observe(P); }
     /* a perek drawn for measuring is handed back to the browser to skip — but only once the browser has recorded
        its size as drawn now (it does that when it reports sizes, P._ro). Handed back earlier, Safari would skip it
@@ -1217,24 +1257,34 @@
       if (pending.size) relRaf = requestAnimationFrame(tryRelease);
     }
     function onResize(entries) {
-      if (!body()) return;
-      const L = line(); let d = 0, acc = 0;
-      entries.sort((a, b) => (a.target.compareDocumentPosition(b.target) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+      const b = body(); if (!b) return;
       for (const e of entries) {
-        const P = e.target; if (!P.isConnected) continue;
-        const h = e.borderBoxSize && e.borderBoxSize[0] ? e.borderBoxSize[0].blockSize : P.getBoundingClientRect().height;
-        const old = P._h, stale = P._k !== gen, now = drawn(P);
-        P._h = h; P._ro = h;
-        if (now) { P._k = gen; learn(P, h); }
-        if (old == null || Math.abs(h - old) < .01) continue;
-        const top = P.getBoundingClientRect().top - acc;
-        // made up for if it was wholly above the reading line — or if this is the browser drawing a skipped perek
-        // for the first time since a change and it starts above the line (Safari draws a perek only once it has
-        // reached the screen: what's below it on the screen is kept in place)
-        if (top + old <= L + 1 || (stale && now && top <= L + 1)) d += h - old;
-        acc += h - old;
+        const P = e.target; if (P.parentElement !== b) continue;
+        P._ro = e.borderBoxSize && e.borderBoxSize[0] ? e.borderBoxSize[0].blockSize : P.getBoundingClientRect().height;
+        if (drawn(P)) { P._k = gen; learn(P, P._ro); }
       }
-      absorb(d);
+      hold(); arm();
+    }
+    /* the pasuk you're reading has moved in the page (not the page scrolled — that's you): put it back. Measured
+       in the page's own coordinates, so a scroll of yours in the same moment is never undone */
+    function hold() {
+      if (!anc) return;
+      if (!anc.row.isConnected || !body()) { anc = null; return; }
+      const d = anc.row.getBoundingClientRect().top + window.scrollY - anc.doc;
+      if (Math.abs(d) >= .01) { absorb(d); anc.doc = anc.row.getBoundingClientRect().top + window.scrollY; }
+    }
+    // and, in quiet times, a look four times a second (a change can come with no event: Safari lays out a font that
+    // has arrived when it gets to it)
+    setInterval(() => { if (!armed && anc && !document.hidden && body() && anc.row.isConnected &&
+      Math.abs(anc.row.getBoundingClientRect().top + window.scrollY - anc.doc) >= .01) { hold(); arm(); } }, 250);
+    let armed = 0, calm = 0;
+    function arm() { calm = 0; if (!armed && body()) armed = requestAnimationFrame(tick); }
+    function tick() {
+      armed = 0;
+      if (!body()) return;
+      const before = anc && anc.row.isConnected ? anc.row.getBoundingClientRect().top + window.scrollY - anc.doc : 0;
+      if (Math.abs(before) >= .01) { hold(); calm = 0; } else calm++;
+      if (calm < 90) armed = requestAnimationFrame(tick);          // about 1½ seconds of nothing moving
     }
     /* draw the nearest perakim above the reading line whose size isn't known for this layout — a few at a
        time (as many as take about 30 ms), so the page is put back in place as few times as possible */
@@ -1283,12 +1333,23 @@
       keep(() => { list.forEach((P) => P.classList.add("cv-on")); void b.offsetHeight; });
       list.forEach((P) => { P._k = gen; }); release(list);
     }
-    window.addEventListener("scroll", () => { if (unsettled && Date.now() - selfScrollAt > 50) near(innerHeight * 1.5); }, { passive: true });
+    window.addEventListener("scroll", () => {
+      if (!body()) return;
+      if (unsettled && Date.now() - selfScrollAt > 50) near(innerHeight * 1.5);
+      noteAnchor(); arm();
+    }, { passive: true });
+    /* a web font arriving changes the size of text everywhere: what's drawn is kept in place as it happens (above),
+       and the perakim skipped meanwhile are measured again before they're reached */
+    if (document.fonts && document.fonts.addEventListener) {
+      document.fonts.addEventListener("loading", () => { if (body()) arm(); });
+      document.fonts.addEventListener("loadingdone", () => { if (body()) { gen++; soon(300); arm(); } });
+    }
     return {
       start(s) {
         st = s; pad = 0; perVerse = 0; clearTimeout(timer); timer = 0;
         if (ro) ro.disconnect();
-        ro = window.ResizeObserver ? new ResizeObserver(onResize) : null;
+        ro = window.ResizeObserver ? new ResizeObserver(onResize) : null; watched = null; anc = null;
+        cancelAnimationFrame(armed); armed = 0;
         observe($$("#seferBody > .perek"));
       },
       /* a setting changed the layout: sizes of perakim not on the screen are no longer known */
@@ -1377,6 +1438,10 @@
   }
   function trackPosition(force) {
     const st = readerState; if (!st) return;
+    // the top bar follows you — not the page's own corrections of its place (only a scroll of yours, or a jump,
+    // can change what it shows)
+    if (!force && st.trackedAt && lastScrollAt <= st.trackedAt) return;
+    st.trackedAt = Date.now();
     const row = topRow(); if (!row) return;
     const hs = row.closest(".haftarah");
     const pos = { s: row.dataset.s, c: +row.dataset.c, v: +row.dataset.v, haft: !!hs };
@@ -2609,14 +2674,18 @@
   }
   /* the web fonts a layout uses, loaded before it is drawn: a font arriving later re-flows the text
      (and, in Pages, the page breaks), which shows as a jump just after the switch */
+  const FONT_SAMPLE = "אבג בְּרֵאשִׁ֖ית Ab ’“—–ĀāḤḥŠšÉé";
   const FONT_FACES = {
+    // the rest of what Scroll and Pages use, so no font arrives after the page is shown (and moves the text)
+    all: ['600 1em "Noto Serif Hebrew"', '500 1em "Frank Ruhl Libre"', '900 1em "Frank Ruhl Libre"', '500 1em "EB Garamond"', '600 1em "EB Garamond"',
+      '400 1em "IBM Plex Sans"', '500 1em "IBM Plex Sans"', '600 1em "IBM Plex Sans"', '400 1em "IBM Plex Sans Hebrew"', '500 1em "IBM Plex Sans Hebrew"', '600 1em "Noto Rashi Hebrew"'],
     pages: ['400 1em "Noto Rashi Hebrew"', '600 1em "Noto Rashi Hebrew"', '500 1em "Frank Ruhl Libre"', '700 1em "Frank Ruhl Libre"', '400 1em "Noto Serif Hebrew"', '400 1em "EB Garamond"', 'italic 400 1em "EB Garamond"'],
     scroll: ['400 1em "Noto Serif Hebrew"', '500 1em "Noto Serif Hebrew"', '400 1em "Frank Ruhl Libre"', '700 1em "Frank Ruhl Libre"', '400 1em "EB Garamond"', 'italic 400 1em "EB Garamond"', '400 1em "Noto Rashi Hebrew"'],
   };
   const fontsAsked = new Set();
   function fontsReady(kind, wait = 1500) {
     if (!document.fonts || !document.fonts.load) return Promise.resolve();
-    const jobs = FONT_FACES[kind].map((f) => { fontsAsked.add(f); return document.fonts.load(f, "אבג בְּרֵאשִׁית Ab").catch(() => {}); });
+    const jobs = [...FONT_FACES[kind], ...FONT_FACES.all].map((f) => { fontsAsked.add(f); return document.fonts.load(f, FONT_SAMPLE).catch(() => {}); });
     return Promise.race([Promise.all(jobs), new Promise((r) => setTimeout(r, wait))]);
   }
   /* Scroll ⇄ Pages: everything the other layout needs is loaded first (texts, commentaries, fonts), then
