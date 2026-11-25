@@ -237,6 +237,9 @@ body { padding-top: var(--topbar-h); }
 
 /* continuous sefer: the page manages its own scroll position while perakim are added */
 .reader { overflow-anchor: none; }
+/* …and the browser's own scroll anchoring is off for the whole page: Safari has it now too, and doing it twice
+   (the browser and the page) moves the text by the size of whatever changed */
+html, body { overflow-anchor: none; }
 .perek { scroll-margin-top: calc(var(--topbar-h) + var(--bar-h) + 6px); }
 /* every perek heading in a sefer has the same margin (nothing changes size as perakim are added above),
    and the sefer itself sits 28px higher so the very first heading is 18px down */

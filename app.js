@@ -1188,12 +1188,33 @@
       if (row && row.isConnected) absorb(row.getBoundingClientRect().top - t0);
       rebase();
     }
-    /* sizes as they are now, after a change that has already been made up for */
-    function rebase() { const b = body(); if (!b) return; for (const P of b.children) P._h = P.getBoundingClientRect().height; }
+    /* after a change of sizes that has already been made up for: the sizes of the perakim that are drawn are the
+       new baseline (a skipped perek keeps its size, and isn't measured — in Safari, measuring a skipped perek just
+       after a setting changed makes it lay the whole perek out). Safari can report a size change a frame or two
+       later than it happened; with the baseline per perek, a late report isn't corrected a second time. */
+    function rebase() {
+      const b = body(); if (!b) return;
+      for (const P of b.children) if (drawn(P)) { P._h = P.getBoundingClientRect().height; P._k = gen; }
+      soon(400);                          // a jump or a change can leave perakim above whose size isn't known
+    }
     function observe(list) { if (ro && body()) for (const P of list) if (P.classList.contains("cv")) ro.observe(P); }
+    /* a perek drawn for measuring is handed back to the browser to skip — but only once the browser has recorded
+       its size as drawn now (it does that when it reports sizes, P._ro). Handed back earlier, Safari would skip it
+       at a size it had before (say, before a setting changed), and the page would move without any report of it. */
+    const pending = new Set(); let relRaf = 0;
     function release(list) {
       if (!list.length) return;
-      frames(3).then(() => { for (const P of list) P.classList.remove("cv-on"); });
+      if (!ro) { frames(3).then(() => list.forEach((P) => P.classList.remove("cv-on"))); return; }
+      list.forEach((P) => pending.add(P));
+      if (!relRaf) relRaf = requestAnimationFrame(tryRelease);
+    }
+    function tryRelease() {
+      relRaf = 0;
+      for (const P of [...pending]) {
+        if (!P.isConnected || !P.classList.contains("cv-on")) { pending.delete(P); continue; }
+        if (P._ro != null && Math.abs(P._ro - P.getBoundingClientRect().height) < .01) { P.classList.remove("cv-on"); pending.delete(P); }
+      }
+      if (pending.size) relRaf = requestAnimationFrame(tryRelease);
     }
     function onResize(entries) {
       if (!body()) return;
@@ -1202,10 +1223,15 @@
       for (const e of entries) {
         const P = e.target; if (!P.isConnected) continue;
         const h = e.borderBoxSize && e.borderBoxSize[0] ? e.borderBoxSize[0].blockSize : P.getBoundingClientRect().height;
-        const old = P._h; P._h = h;
-        if (drawn(P)) { P._k = gen; learn(P, h); }
+        const old = P._h, stale = P._k !== gen, now = drawn(P);
+        P._h = h; P._ro = h;
+        if (now) { P._k = gen; learn(P, h); }
         if (old == null || Math.abs(h - old) < .01) continue;
-        if (P.getBoundingClientRect().top - acc + old <= L + 1) d += h - old;    // it was wholly above the reading line
+        const top = P.getBoundingClientRect().top - acc;
+        // made up for if it was wholly above the reading line — or if this is the browser drawing a skipped perek
+        // for the first time since a change and it starts above the line (Safari draws a perek only once it has
+        // reached the screen: what's below it on the screen is kept in place)
+        if (top + old <= L + 1 || (stale && now && top <= L + 1)) d += h - old;
         acc += h - old;
       }
       absorb(d);
@@ -1226,15 +1252,38 @@
         if (drawn(P)) { P._k = gen; continue; }
         list.push(P);
       }
-      if (!list.length) return;
+      if (!list.length) { unsettled = false; return; }       // every perek above has its size for this layout
       const t0 = performance.now();
       keep(() => { list.forEach((P) => P.classList.add("cv-on")); void b.offsetHeight; });
       const ms = performance.now() - t0;
-      batch = ms < 15 ? Math.min(batch * 2, 16) : ms > 45 ? Math.max(1, batch >> 1) : batch;
-      list.forEach((P) => { P._k = gen; learn(P, P._h); }); release(list);
-      soon(60);
+      // about 50 ms of work a time: each batch is one correction of the page (and one repaint of the screen)
+      batch = ms < 30 ? Math.min(batch + 1, 12) : ms > 70 ? Math.max(1, batch - 1) : batch;
+      list.forEach((P) => { P._k = gen; }); release(list);
+      soon(i - list.length > 3 ? 200 : 60);     // the nearest few soon, those further up at an easier pace
     }
-    function soon(ms = 250) { if (!timer && body()) timer = setTimeout(() => idle(step, 1200), ms); }
+    function soon(ms = 250) { if (!timer && body()) { unsettled = true; timer = setTimeout(() => idle(step, 1200), ms); } }
+    /* the perakim just above the screen whose size isn't known for this layout, drawn now — from a scroll event,
+       that's before the browser draws this frame: scrolling up into them (Safari draws a skipped perek only as it
+       reaches the screen, and reports its new size a frame later) never shows the page jumping */
+    let unsettled = false;
+    function near(reach) {
+      const b = body(); if (!b || !unsettled) return;
+      const ps = b.children, L = line();
+      let lo = 0, hi = ps.length - 1, i = ps.length;
+      while (lo <= hi) { const m = (lo + hi) >> 1; if (ps[m].getBoundingClientRect().bottom > L) { i = m; hi = m - 1; } else lo = m + 1; }
+      const list = [];
+      for (let j = i - 1; j >= 0 && list.length < 4; j--) {
+        const P = ps[j];
+        if (P.getBoundingClientRect().bottom < L - reach) break;
+        if (P._k === gen) continue;
+        if (drawn(P)) { P._k = gen; continue; }
+        list.push(P);
+      }
+      if (!list.length) return;
+      keep(() => { list.forEach((P) => P.classList.add("cv-on")); void b.offsetHeight; });
+      list.forEach((P) => { P._k = gen; }); release(list);
+    }
+    window.addEventListener("scroll", () => { if (unsettled && Date.now() - selfScrollAt > 50) near(innerHeight * 1.5); }, { passive: true });
     return {
       start(s) {
         st = s; pad = 0; perVerse = 0; clearTimeout(timer); timer = 0;
@@ -1243,7 +1292,7 @@
         observe($$("#seferBody > .perek"));
       },
       /* a setting changed the layout: sizes of perakim not on the screen are no longer known */
-      changed() { if (!body()) return; gen++; perVerse = 0; rebase(); soon(150); },
+      changed() { if (!body()) return; gen++; perVerse = 0; rebase(); unsettled = true; near(innerHeight); soon(150); },
       /* perakim between two points are drawn now, so a scroll from one to the other lands where it should */
       drawBetween(a, b) {
         const B = body(); if (!B || !a || !b) return;
@@ -1932,7 +1981,8 @@
     // a whole sefer: the perakim on and near the screen now, the rest one at a time in quiet moments, nearest
     // first (with Rashi always open that's every comment in the sefer — too much to build in one go)
     const tok = st.decTok = (st.decTok || 0) + 1;
-    const ps = [...sb.children], top = topRow(), k0 = Math.max(0, top ? ps.indexOf(top.closest(".perek")) : 0);
+    const ps = [...sb.children], here = st.lastPos && !st.lastPos.haft ? $(`#perek-${st.slug}-${st.lastPos.c}`) : null;
+    const k0 = Math.max(0, here ? ps.indexOf(here) : 0);
     const paintP = (P) => { P.querySelectorAll(".verse").forEach(paintRow); };
     const rest = [];
     ps.forEach((P, i) => { if (Math.abs(i - k0) <= 1 || P.classList.contains("cv-on")) paintP(P); else rest.push([Math.abs(i - k0), P]); });
@@ -1973,7 +2023,7 @@
     if (settings.rashiOpen) { return; }
     const willOpen = force != null ? force : !st.open.has(key);
     if (willOpen) st.open.add(key); else st.open.delete(key);
-    paintRow(row);
+    paintRow(row); sizer.rebase();
   }
 
   function onVerseClick(e) {
