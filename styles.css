@@ -242,7 +242,11 @@ body { padding-top: var(--topbar-h); }
    and the sefer itself sits 28px higher so the very first heading is 18px down */
 .sefer .chapter-head { margin-top: 46px; }
 .sefer { margin-top: -28px; }
-.perek-batch { display: flow-root; }
+/* a perek far from the screen is skipped (not styled or laid out) and holds a size of its own — see the sizer in
+   app.js. flow-root: margins stay inside the perek whether it is drawn or skipped, so its size is the same both ways */
+.sefer > .perek.cv { display: flow-root; content-visibility: auto; }
+.sefer > .perek.cv.cv-on { content-visibility: visible; }
+#sbPad { height: 0; }
 
 /* parasha petucha / setuma — the gaps in a Sefer Torah */
 .ps-break { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 0 10px; }
