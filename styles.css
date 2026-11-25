@@ -66,9 +66,6 @@ button { font: inherit; color: inherit; }
   display: flex; align-items: center; gap: 12px; padding: 0 16px;
   background: var(--paper);
   border-bottom: 1px solid var(--rule);
-  /* a layer of its own: the page scrolling or being redrawn under it (Safari on iPad moves the page itself when
-     the sefer fills in above) never makes Safari redraw the bar */
-  transform: translateZ(0); -webkit-backface-visibility: hidden; backface-visibility: hidden;
 }
 body { padding-top: var(--topbar-h); }
 .brand { display: flex; align-items: baseline; gap: 8px; text-decoration: none; flex-shrink: 0; }
@@ -239,11 +236,12 @@ body { padding-top: var(--topbar-h); }
 .pill.on::before { background: var(--accent); }
 
 /* continuous sefer: the page manages its own scroll position while perakim are added */
-.reader { overflow-anchor: none; }
-/* …and the browser's own scroll anchoring is off for the whole page: Safari has it now too, and doing it twice
-   (the browser and the page) moves the text by the size of whatever changed */
-html, body, body * { overflow-anchor: none; }
-.perek { scroll-margin-top: calc(var(--topbar-h) + var(--bar-h) + 6px); }
+
+/* Where the browser has scroll anchoring it keeps your place (see the sizer in app.js); the page does it only where
+   the browser can't. The top bar (and copy bar) are kept out of the "viewing region" (scroll-padding, set from
+   app.js to their height), so the browser anchors to the pasuk you're reading, not to one hidden under the bar —
+   and scrolling to a perek, aliyah or haftarah lands just below them (their scroll margins are only the gap). */
+.perek { scroll-margin-top: 6px; }
 /* every perek heading in a sefer has the same margin (nothing changes size as perakim are added above),
    and the sefer itself sits 28px higher so the very first heading is 18px down */
 .sefer .chapter-head { margin-top: 46px; }
@@ -288,7 +286,7 @@ html, body, body * { overflow-anchor: none; }
 .aliyah-tag {
   display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
   margin: 18px 0 2px; padding: 2px 10px 3px; border-bottom: 1px solid color-mix(in srgb, var(--gold) 45%, transparent);
-  scroll-margin-top: calc(var(--topbar-h) + var(--bar-h) + 10px);
+  scroll-margin-top: 10px;
 }
 .aliyah-tag .en { font-size: .72rem; text-transform: uppercase; letter-spacing: .1em; color: var(--gold); }
 .aliyah-tag .he { font-size: 1.05rem; font-weight: 700; color: var(--gold); }
@@ -303,7 +301,7 @@ html, body, body * { overflow-anchor: none; }
   grid-template-columns: minmax(0, 1fr) 3rem minmax(0, 1.2fr);
   grid-template-areas: "en num he";
   column-gap: 18px; padding: 10px 10px; border-radius: 10px; cursor: pointer;
-  scroll-margin-top: calc(var(--topbar-h) + var(--bar-h) + 24px);
+  scroll-margin-top: 24px;
   transition: background-color .15s;
 }
 .verse:hover { background: color-mix(in srgb, var(--paper-2) 70%, transparent); }
@@ -572,7 +570,7 @@ body.copy-mode .comment, body.copy-mode .ir-c { padding-left: 26px; }
 .mode-stack .rline { grid-template-columns: minmax(0, 1fr) 3rem; grid-template-areas: "he gap" "en gap"; }
 
 /* Haftarah */
-.haftarah { margin: 44px 0 8px; border-top: 2px solid var(--gold); padding-top: 10px; scroll-margin-top: calc(var(--topbar-h) + var(--bar-h) + 10px); }
+.haftarah { margin: 44px 0 8px; border-top: 2px solid var(--gold); padding-top: 10px; scroll-margin-top: 10px; }
 .haftarah.card { margin: 18px 0; padding: 10px 14px 12px; border: 1px solid color-mix(in srgb, var(--gold) 55%, transparent); border-radius: 12px; background: var(--card); }
 .haft-title { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
 .haft-title .en { font-size: .76rem; text-transform: uppercase; letter-spacing: .1em; color: var(--gold); }

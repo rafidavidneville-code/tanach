@@ -204,6 +204,15 @@
     ["side", "stack", "he", "en"].forEach((m) => document.body.classList.toggle("mode-" + m, settings.mode === m));
   }
   function saveSettings() { store.set("settings", settings); applySettings(); }
+  /* the page's viewing region starts below the top bar and the copy bar (scroll-padding on the page), kept to their
+     height as it changes */
+  function syncScrollPad() {
+    const tb = $(".topbar"), cb = $("#copybar"); if (!tb) return;
+    const h = Math.round(tb.getBoundingClientRect().bottom + (cb && !cb.hidden ? cb.offsetHeight : 0));
+    const v = h + "px"; if (document.documentElement.style.scrollPaddingTop !== v) document.documentElement.style.scrollPaddingTop = v;
+  }
+  if (window.ResizeObserver) { const o = new ResizeObserver(syncScrollPad); const watchBars = () => { const tb = $(".topbar"), cb = $("#copybar"); if (tb) o.observe(tb); if (cb) o.observe(cb); syncScrollPad(); };
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", watchBars); else watchBars(); }
 
   /* ───────── Routing ───────── */
   function parseRoute(hash) {
@@ -1053,15 +1062,19 @@
       else if (c0 > 1) $(`#perek-${slug}-${c0}`).scrollIntoView({ block: "start" });
       else window.scrollTo(0, 0);
     };
-    // the page is put in place in the same frame its text arrives, so it is never seen at the top of the
-    // sefer first; painting Rashi (which can change heights above) then keeps that place — Safari has no
-    // scroll anchoring to do it for us
+    // Everything that gives the perakim their heights goes in before the page is placed — aliyah headings, and
+    // Rashi when it's already in memory (a microtask, not a frame: nothing is seen before it's in place) — so
+    // nothing moves after it's placed. Otherwise the page is put in place in the same frame its text arrives (it
+    // is never seen at the top of the sefer first), and that place is kept while Rashi is painted in.
+    afterInsert($$(".perek", body), false);
+    const cm = commMeta(st.tab);
+    const ready = resolved.has(commUrl(st.tab, slug)) && (!settings.rashiEn || !cm.enDir || resolved.has(commEnUrl(st.tab, slug))) &&
+      !(settings.rashiLines && settings.rashiEn && !LEX);
+    if (ready) { await decorateCommentary(); if (readerState !== st) return; }
     const early = !pendingAnchor && !pendingHaftOpen;
     let spot = null;
     if (early) { place(); spot = captureSpot(); }
-    await decorateCommentary();            // loads Rashi once for the sefer, paints these perakim
-    if (readerState !== st) return;
-    afterInsert($$(".perek", body), false);
+    if (!ready) { await decorateCommentary(); if (readerState !== st) return; }   // loads Rashi once for the sefer
     if (pendingHaftOpen) {
       const el = $(`#haft-${pendingHaftOpen}`); pendingHaftOpen = null;
       if (el) { el.classList.add("full"); el.classList.remove("card"); await fillHaftarah(el, true); if (readerState !== st) return; st.rowsDirty = true; }
@@ -1144,14 +1157,15 @@
       return;
     }
     const cs = [];
-    while (st.lo > 1 && (cs.length === 0 || count < 40)) { st.lo--; cs.unshift(st.lo); count += b.verses[st.lo - 1]; }
-    for (const c of cs) html += perekHTML(st.slug, c, st.text, st.r, true);
+    while (st.lo > 1 && (cs.length === 0 || count < (sizer.native ? 160 : 40))) { st.lo--; cs.unshift(st.lo); count += b.verses[st.lo - 1]; }
+    for (const c of cs) html += perekHTML(st.slug, c, st.text, st.r, !sizer.native);
     // before: keep whatever the reader is looking at exactly where it is. They are drawn as they go in, so
     // their sizes are real at once (one correction, none later), then left to the browser to skip
     const tpl = document.createElement("template"); tpl.innerHTML = html;
     const secs = [...tpl.content.children];
     sizer.keep(() => { body.prepend(tpl.content); afterInsert(secs); });
-    sizer.mark(secs); sizer.observe(secs); sizer.release(secs);
+    sizer.observe(secs);
+    if (!sizer.native) { sizer.mark(secs); sizer.release(secs); }
   }
   /* ── Sizes in a whole sefer (Scroll) ──
      A perek far from the screen is skipped by the browser (content-visibility: auto): not styled or laid out,
@@ -1165,6 +1179,11 @@
        • every correction is a whole number of pixels, with a pad above the perakim taking the fraction, so
          the text on the screen never moves by part of a pixel (which shows as a shimmer). */
   const sizer = (() => {
+    /* Where the browser keeps your place itself (scroll anchoring: Safari 27 and later, Chrome, Firefox), it is left
+       to do so — it adjusts the page inside its own layout, in the same frame, even during a fling; doing it from
+       the page as well moved the text twice, and on iPad the page's own corrections showed as flicker. The page's
+       own keeping of the place (below) is only for browsers without it (older Safari). */
+    const native = !!(window.CSS && CSS.supports && CSS.supports("overflow-anchor", "auto")) && store.get("anchorMode", "") !== "manual";
     let st = null, ro = null, gen = 1, pad = 0, timer = 0, perVerse = 0;
     const body = () => (st && readerState === st ? $("#seferBody") : null);
     const line = () => $(".topbar").getBoundingClientRect().bottom + ($("#copybar").hidden ? 0 : $("#copybar").offsetHeight) + 8;
@@ -1181,7 +1200,7 @@
     }
     /* the content above what you're reading grew by d px: scroll by a whole number of pixels, the pad takes the rest */
     function absorb(d) {
-      if (!(Math.abs(d) >= .01)) return;
+      if (native || !(Math.abs(d) >= .01)) return;
       const s = Math.ceil(d - pad - 1e-4);
       pad = Math.min(.999, Math.max(0, pad + s - d));
       const el = $("#sbPad"); if (el) el.style.height = pad.toFixed(3) + "px";
@@ -1189,6 +1208,7 @@
     }
     /* run something that changes sizes above where you're reading, keeping your place */
     function keep(fn) {
+      if (native) { fn(); return; }
       if (!anc || !anc.row.isConnected) noteAnchor();
       const row = anc ? anc.row : topRow(), t0 = anc ? anc.doc - window.scrollY : row ? row.getBoundingClientRect().top : 0;
       fn();
@@ -1199,7 +1219,7 @@
        is where it stays. Perakim that are drawn have sizes known for this layout. (Skipped perakim aren't measured:
        in Safari, measuring one just after a setting changed makes it lay the whole perek out.) */
     function rebase() {
-      const b = body(); if (!b) return;
+      const b = body(); if (!b || native) return;
       for (const P of b.children) if (drawn(P)) P._k = gen;
       noteAnchor();
       soon(400);                          // a jump or a change can leave perakim above whose size isn't known
@@ -1212,7 +1232,7 @@
     let anc = null;
     function noteAnchor() {
       anc = null;
-      const b = body(); if (!b) return;
+      const b = body(); if (!b || native) return;
       // only perakim that are drawn are measured (a skipped one can cost Safari a whole layout of it)
       const L = line() + 14;
       let P = null;
@@ -1263,7 +1283,7 @@
         P._ro = e.borderBoxSize && e.borderBoxSize[0] ? e.borderBoxSize[0].blockSize : P.getBoundingClientRect().height;
         if (drawn(P)) { P._k = gen; learn(P, P._ro); }
       }
-      hold(); arm();
+      if (!native) { hold(); arm(); }
     }
     /* the pasuk you're reading has moved in the page (not the page scrolled — that's you): put it back. Measured
        in the page's own coordinates, so a scroll of yours in the same moment is never undone */
@@ -1275,10 +1295,10 @@
     }
     // and, in quiet times, a look four times a second (a change can come with no event: Safari lays out a font that
     // has arrived when it gets to it)
-    setInterval(() => { if (!armed && anc && !document.hidden && body() && anc.row.isConnected &&
+    setInterval(() => { if (!native && !armed && anc && !document.hidden && body() && anc.row.isConnected &&
       Math.abs(anc.row.getBoundingClientRect().top + window.scrollY - anc.doc) >= .01) { hold(); arm(); } }, 250);
     let armed = 0, calm = 0;
-    function arm() { calm = 0; if (!armed && body()) armed = requestAnimationFrame(tick); }
+    function arm() { calm = 0; if (!armed && !native && body()) armed = requestAnimationFrame(tick); }
     function tick() {
       armed = 0;
       if (!body()) return;
@@ -1291,7 +1311,7 @@
     let batch = 2;
     function step() {
       timer = 0;
-      const b = body(); if (!b) return;
+      const b = body(); if (!b || native) return;
       if (touching || Date.now() - lastScrollAt < 300 || layoutSwitch || document.hidden) { soon(400); return; }
       const ps = b.children, L = line();
       let lo = 0, hi = ps.length - 1, i = ps.length;
@@ -1311,13 +1331,13 @@
       list.forEach((P) => { P._k = gen; }); release(list);
       soon(i - list.length > 3 ? 200 : 60);     // the nearest few soon, those further up at an easier pace
     }
-    function soon(ms = 250) { if (!timer && body()) { unsettled = true; timer = setTimeout(() => idle(step, 1200), ms); } }
+    function soon(ms = 250) { if (!timer && !native && body()) { unsettled = true; timer = setTimeout(() => idle(step, 1200), ms); } }
     /* the perakim just above the screen whose size isn't known for this layout, drawn now — from a scroll event,
        that's before the browser draws this frame: scrolling up into them (Safari draws a skipped perek only as it
        reaches the screen, and reports its new size a frame later) never shows the page jumping */
     let unsettled = false;
     function near(reach) {
-      const b = body(); if (!b || !unsettled) return;
+      const b = body(); if (!b || !unsettled || native) return;
       const ps = b.children, L = line();
       let lo = 0, hi = ps.length - 1, i = ps.length;
       while (lo <= hi) { const m = (lo + hi) >> 1; if (ps[m].getBoundingClientRect().bottom > L) { i = m; hi = m - 1; } else lo = m + 1; }
@@ -1334,15 +1354,15 @@
       list.forEach((P) => { P._k = gen; }); release(list);
     }
     window.addEventListener("scroll", () => {
-      if (!body()) return;
+      if (native || !body()) return;
       if (unsettled && Date.now() - selfScrollAt > 50) near(innerHeight * 1.5);
       noteAnchor(); arm();
     }, { passive: true });
     /* a web font arriving changes the size of text everywhere: what's drawn is kept in place as it happens (above),
        and the perakim skipped meanwhile are measured again before they're reached */
     if (document.fonts && document.fonts.addEventListener) {
-      document.fonts.addEventListener("loading", () => { if (body()) arm(); });
-      document.fonts.addEventListener("loadingdone", () => { if (body()) { gen++; soon(300); arm(); } });
+      document.fonts.addEventListener("loading", () => { if (body() && !native) arm(); });
+      document.fonts.addEventListener("loadingdone", () => { if (body() && !native) { gen++; soon(300); arm(); } });
     }
     return {
       start(s) {
@@ -1353,7 +1373,8 @@
         observe($$("#seferBody > .perek"));
       },
       /* a setting changed the layout: sizes of perakim not on the screen are no longer known */
-      changed() { if (!body()) return; gen++; perVerse = 0; rebase(); unsettled = true; near(innerHeight); soon(150); },
+      native,
+      changed() { if (!body() || native) return; gen++; perVerse = 0; rebase(); unsettled = true; near(innerHeight); soon(150); },
       /* perakim between two points are drawn now, so a scroll from one to the other lands where it should */
       drawBetween(a, b) {
         const B = body(); if (!B || !a || !b) return;
@@ -2773,7 +2794,7 @@
     if (a.pages) { if (PG && $(".pager")) pagerReanchor(a.pages); return; }
     const r = a.row && document.getElementById(a.row);
     if (!r) return;
-    const d = r.getBoundingClientRect().top - a.top; if (Math.abs(d) > .5) { selfScrollAt = Date.now(); window.scrollBy(0, d); }
+    const d = r.getBoundingClientRect().top - a.top; if (!sizer.native && Math.abs(d) > .5) { selfScrollAt = Date.now(); window.scrollBy(0, d); }
     // if you were partway through this pasuk's Rashi and it closed, the pasuk itself could now be above the
     // screen: bring it back to the top, so you're still on the same pasuk
     const line = $(".topbar").getBoundingClientRect().bottom + ($("#copybar").hidden ? 0 : $("#copybar").offsetHeight);
