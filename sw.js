@@ -6,7 +6,7 @@
    Other data the reader has opened lately: kept too (the last 60 files), served at once and refreshed in the
    background.
    Fonts: kept once fetched. */
-const SHELL = "tanach-shell-v3", DATA = "tanach-data", RECENT = "tanach-recent", FONTS = "tanach-fonts";
+const SHELL = "tanach-shell-v4", DATA = "tanach-data", RECENT = "tanach-recent", FONTS = "tanach-fonts";
 const SHELL_FILES = ["./", "index.html", "app.js", "styles.css", "favicon.svg", "apple-touch-icon.png", "icon-192.png", "icon-512.png", "manifest.webmanifest", "data/index.json", "data/manifest.json", "data/lex.json", "data/shabbat-il.json"];
 const BASE = new URL("./", self.location).pathname;
 
@@ -59,13 +59,30 @@ async function fromShell(req, rel) {
   const cache = await caches.open(SHELL);
   const key = req.mode === "navigate" || rel === "" || rel === "index.html" ? new URL("./", self.location).href : req.url;
   const cached = await cache.match(key, { ignoreSearch: true });
-  const net = fetch(req, { cache: "no-cache" }).then((res) => {
-    if (res.ok && res.type === "basic") cache.put(key, res.clone());
+  const before = cached && SIGNAL.test(key) ? cached.clone() : null;   // (the saved copy itself goes to the page)
+  const net = fetch(req, { cache: "no-cache" }).then(async (res) => {
+    if (res.ok && res.type === "basic") {
+      // a different file than the saved one: keep it, and tell the open pages a new version is ready
+      if (before && await changed(before, res.clone())) tellUpdated();
+      await cache.put(key, res.clone());
+    }
     return res;
   });
   if (!cached) return net;
   net.catch(() => {});
   return cached;                                  // at once; the fresh copy is kept for next time
+}
+const SIGNAL = /\/(app\.js|styles\.css|index\.html|)$/;
+async function changed(a, b) {
+  const ea = a.headers.get("etag"), eb = b.headers.get("etag");
+  if (ea && eb) return ea !== eb;
+  return (await a.text()) !== (await b.text());
+}
+let told = 0;
+function tellUpdated() {
+  if (Date.now() - told < 60000) return;
+  told = Date.now();
+  setTimeout(() => self.clients.matchAll({ type: "window" }).then((cs) => cs.forEach((c) => c.postMessage({ type: "updated" }))), 1500);
 }
 
 async function fromFonts(req) {

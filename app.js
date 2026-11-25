@@ -97,9 +97,12 @@
   function htmlToText(html) { const t = document.createElement("template"); t.innerHTML = html || ""; return norm(cleanFrag(t.content).textContent); }
 
   let toastTimer;
-  function toast(msg) {
-    const t = $("#toast"); t.textContent = msg; t.classList.add("show");
-    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 2000);
+  function toast(msg, act) {
+    const t = $("#toast");
+    t.textContent = msg; t.classList.toggle("has-act", !!act);
+    if (act) { const b = document.createElement("button"); b.type = "button"; b.className = "toast-act"; b.textContent = act.label; b.addEventListener("click", act.run); t.append(b); }
+    t.classList.add("show");
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), act ? 12000 : 2000);
   }
 
   /* ───────── Data ───────── */
@@ -2115,7 +2118,7 @@
     const extra = secs.filter((x) => !["torah", "neviim", "ketuvim"].includes(x.id));
     const cols = [[byId("torah"), ...extra], [byId("neviim")], [byId("ketuvim")]].map((col) => col.filter(Boolean));
     $("#pickerBody").innerHTML = `<div class="picker-sections">${cols.map((col) =>
-      `<div class="pk-col">${col.map((sec) => secHTML(sec, secs.indexOf(sec))).join("")}</div>`).join("")}</div>`;
+      `<div class="pk-col">${col.map((sec) => secHTML(sec, 0)).join("")}</div>`).join("")}</div>`;
     $$("#pickerBody [data-book]").forEach((b) => b.addEventListener("click", () => showChapters(b.dataset.book)));
   }
   function showChapters(slug) {
@@ -2636,6 +2639,10 @@
     if (!("serviceWorker" in navigator) || !("caches" in window)) { OFF.why = "unsupported"; return; }
     try { await navigator.serviceWorker.register("sw.js"); OFF.ok = true; }
     catch { OFF.why = "blocked"; return; }
+    // the site opens from its saved copy; when a newer one has just been fetched, offer it
+    navigator.serviceWorker.addEventListener("message", (e) => {
+      if (e.data && e.data.type === "updated") toast("A new version of the site is ready", { label: "Reload", run: () => { savePlaceNow(); location.reload(); } });
+    });
     setTimeout(() => syncDownloads().catch(() => {}), 5000);
   }
   const absUrl = (p) => new URL(p, location.href).href;
