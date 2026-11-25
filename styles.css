@@ -122,6 +122,25 @@ body { padding-top: var(--topbar-h); }
   background: var(--paper); color: var(--accent);
 }
 .cb-copy:disabled { opacity: .45; cursor: default; }
+.cb-link { border: 0; background: none; color: var(--paper); font: inherit; font-size: .82rem; font-weight: 600; padding: 6px 6px; cursor: pointer; white-space: nowrap; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: color-mix(in srgb, var(--paper) 50%, transparent); }
+.cb-link:hover { text-decoration-color: var(--paper); }
+.copybar .cb-s { display: none; }
+@media (max-width: 560px) {
+  .copybar .cb-l { display: none; }
+  .copybar .cb-s { display: inline; }
+  .cb-copy { padding: 6px 12px; }
+  .cb-link { padding: 6px 3px; }
+}
+/* pesukim picked for copying (copy mode): a tinted row with a tick by its number */
+body.copy-mode .verse { cursor: pointer; }
+.verse.picked { background: color-mix(in srgb, var(--accent) 9%, transparent); box-shadow: inset 3px 0 0 var(--accent), inset -3px 0 0 var(--accent); }
+.verse.picked .n-he::after { content: " ✓"; color: var(--accent); font-weight: 700; }
+.pg-pasuk.picked { background: color-mix(in srgb, var(--accent) 8%, transparent); border-radius: 10px; }
+.pg-tools .pg-pick { display: none; gap: 4px; align-items: center; font: inherit; font-size: .78rem; font-weight: 600; padding: 3px 7px; }
+body.copy-mode .pg-tools .pg-pick { display: inline-flex; }
+.pg-pick .tick { opacity: 0; }
+.pg-pick.on { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.pg-pick.on .tick { opacity: 1; }
 .copybar .icon-btn { color: var(--paper); width: 32px; height: 32px; }
 .copybar .icon-btn:hover { background: rgba(255,255,255,.15); color: var(--paper); }
 @media (max-width: 720px) {

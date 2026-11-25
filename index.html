@@ -58,10 +58,12 @@
   <div class="copybar-inner">
     <span class="cb-title"><span class="he">מצב העתקה</span> Copy mode</span>
     <div class="seg" role="group" aria-label="Copy format">
-      <button type="button" data-v="both">Hebrew + English</button>
-      <button type="button" data-v="he">Hebrew only</button>
+      <button type="button" data-v="both"><span class="cb-l">Hebrew + English</span><span class="cb-s">He + En</span></button>
+      <button type="button" data-v="he"><span class="cb-l">Hebrew only</span><span class="cb-s">He</span></button>
     </div>
     <span class="cb-preview" id="copyPreview"></span>
+    <button class="cb-link" id="copyFill" type="button" hidden title="Select every pasuk between the first and the last selected">Fill in</button>
+    <button class="cb-link" id="copyClear" type="button" hidden title="Let go of the selected pesukim">Clear</button>
     <button class="cb-copy" id="copySelBtn" type="button" disabled>Copy</button>
     <button class="icon-btn" id="copyExit" type="button" aria-label="Exit copy mode" title="Exit copy mode">
       <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>

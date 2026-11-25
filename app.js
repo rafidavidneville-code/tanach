@@ -685,7 +685,7 @@
         return { top: haftHeadHTML(p, it), body: `<div class="loading" style="padding:30px 0;font-size:1rem">טוען…</div>` };
       }
       const top = haftHeadHTML(p, it) + `<div class="pg-head"><span class="he"><a href="${chapterHash(it.s, it.c, it.v)}" title="Open in ${esc(hb.en)}">${esc(hb.he)} ${plainGem(it.c)}:${plainGem(it.v)}</a></span>${pgTools(it.s, it.c, it.v)}<span class="en">${esc(hb.en)} ${it.c}:${it.v}</span></div>
-        <div class="pg-pasuk cu" data-kind="verse" data-s="${it.s}" data-c="${it.c}" data-v="${it.v}"><div class="cu-he">${phrasedPasuk(text.he[it.c - 1][it.v - 1], text.en[it.c - 1][it.v - 1], reg, "JPS")}</div></div>`;
+        <div class="pg-pasuk cu${picks.has(pickKey(it.s, it.c, it.v)) ? " picked" : ""}" data-kind="verse" data-s="${it.s}" data-c="${it.c}" data-v="${it.v}"><div class="cu-he">${phrasedPasuk(text.he[it.c - 1][it.v - 1], text.en[it.c - 1][it.v - 1], reg, "JPS")}</div></div>`;
       return { top, body: commentaryBody(it.s, it.c, it.v, reg) };
     }
     const { c, v } = it, s = PG.slug;
@@ -696,11 +696,11 @@
     if (b.section === "torah") for (const p of INDEX.parshiot.filter((x) => x.range[0] === s)) for (const stp of aliyahStops(p)) if (stp.c === c && stp.v === v) tags.push(esc(stp.he));
     if (settings.sedarim && SEDER.has(key)) tags.push(`סדר ${esc(SEDER.get(key))}`);
     const top = `<div class="pg-head"><span class="he">${esc(b.he)} ${plainGem(c)}:${plainGem(v)}${tags.length ? ` <small>· ${tags.join(" · ")}</small>` : ""}</span>${pgTools(s, c, v)}<span class="en">${esc(b.en)} ${c}:${v}</span></div>
-      <div class="pg-pasuk cu" data-kind="verse" data-s="${s}" data-c="${c}" data-v="${v}"><div class="cu-he">${phrasedPasuk(PG.text.he[c - 1][v - 1], PG.text.en[c - 1][v - 1], reg, "JPS")}</div></div>`;
+      <div class="pg-pasuk cu${picks.has(pickKey(s, c, v)) ? " picked" : ""}" data-kind="verse" data-s="${s}" data-c="${c}" data-v="${v}"><div class="cu-he">${phrasedPasuk(PG.text.he[c - 1][v - 1], PG.text.en[c - 1][v - 1], reg, "JPS")}</div></div>`;
     return { top, body: commentaryBody(s, c, v, reg) };
   }
   function pgTools(s, c, v) {
-    return `<span class="pg-tools"><button type="button" class="pg-bm ${isBookmarked(s, c, v) ? "on" : ""}" data-s="${s}" data-c="${c}" data-v="${v}" aria-label="Bookmark" title="Bookmark">${iconBookmark}</button><button type="button" class="pg-copy" aria-label="Copy this pasuk" title="Copy this pasuk">${iconCopy}</button></span>`;
+    return `<span class="pg-tools"><button type="button" class="pg-bm ${isBookmarked(s, c, v) ? "on" : ""}" data-s="${s}" data-c="${c}" data-v="${v}" aria-label="Bookmark" title="Bookmark">${iconBookmark}</button><button type="button" class="pg-copy" aria-label="Copy this pasuk" title="Copy this pasuk">${iconCopy}</button><button type="button" class="pg-pick ${picks.has(pickKey(s, c, v)) ? "on" : ""}" data-s="${s}" data-c="${c}" data-v="${v}" aria-pressed="${picks.has(pickKey(s, c, v))}" title="Select this pasuk to copy with others"><svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><rect x="3" y="3" width="14" height="14" rx="3.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path class="tick" d="M6.5 10.2l2.4 2.4 4.6-5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg><span>${picks.has(pickKey(s, c, v)) ? "Selected" : "Select"}</span></button></span>`;
   }
   function commentaryBody(s, c, v, reg) {
     let body = "";
@@ -860,6 +860,8 @@
       if (bm) { toggleBookmark(bm.dataset.s, +bm.dataset.c, +bm.dataset.v, bm); return; }
       const cp = e.target.closest(".pg-copy");
       if (cp) { const u = $("#pgTop .pg-pasuk.cu"); if (u) copyUnit(u); return; }
+      const pk = e.target.closest(".pg-pick");
+      if (pk) { togglePick(pk.dataset.s, +pk.dataset.c, +pk.dataset.v); return; }
       const ho = e.target.closest(".haft-opt");
       if (ho) {
         const pid = ho.dataset.pid;
@@ -1752,7 +1754,7 @@
     const he = heText(text.he[c - 1][v - 1] || "");
     const en = text.en[c - 1][v - 1] || "";
     const on = isBookmarked(slug, c, v);
-    return `<div class="verse cu" data-kind="verse" id="v-${slug}-${c}-${v}" data-s="${slug}" data-c="${c}" data-v="${v}">
+    return `<div class="verse cu${picks.has(pickKey(slug, c, v)) ? " picked" : ""}" data-kind="verse" id="v-${slug}-${c}-${v}" data-s="${slug}" data-c="${c}" data-v="${v}">
       <div class="v-he cu-he">${he}</div>
       <div class="v-num no-copy">
         <span class="n-he">${gematria(v)}</span><span class="n-en">${v}</span>
@@ -2132,7 +2134,7 @@
     if (e.target.closest(".rashi-pill")) { toggleRashi(row); markSelected(s, c, v); return; }
     if (e.target.closest(".rdrop")) return;                        // reading / selecting inside Rashi
     if (window.getSelection && String(window.getSelection()).length > 1) return; // selecting text
-    if (copyMode) return;                                          // taps in copy mode don't toggle
+    if (copyMode) { togglePick(s, c, v); return; }                 // copy mode: a tap picks the pasuk (or lets it go)
     // a second tap on the selected pasuk lets it go (and closes its Rashi)
     if (row.classList.contains("selected")) { clearSelected(); toggleRashi(row, false); return; }
     markSelected(s, c, v);
@@ -2241,10 +2243,10 @@
         const en = u.enSel != null ? u.enSel : htmlToText(text.en[u.c - 1][u.v - 1]);
         const prev = blocks[blocks.length - 1];
         if (prev && prev.kind === "verse" && prev.s === u.s) {
-          if (prev.last.c === u.c && prev.last.v === u.v) continue; // same pasuk shown twice (text + panel)
-          prev.he.push(he); prev.en.push(en); prev.last = { c: u.c, v: u.v };
+          if (prev.items.some((x) => x.c === u.c && x.v === u.v)) continue; // same pasuk shown twice (text + panel)
+          prev.items.push({ c: u.c, v: u.v, he, en }); prev.he.push(he); prev.en.push(en); prev.last = { c: u.c, v: u.v };
         } else {
-          blocks.push({ kind: "verse", s: u.s, first: { c: u.c, v: u.v }, last: { c: u.c, v: u.v }, he: [he], en: [en] });
+          blocks.push({ kind: "verse", s: u.s, first: { c: u.c, v: u.v }, last: { c: u.c, v: u.v }, he: [he], en: [en], items: [{ c: u.c, v: u.v, he, en }] });
         }
       } else {
         const d = commData(u);
@@ -2260,13 +2262,28 @@
     return blocks;
   }
 
+  /* the pesukim of a block as runs: כד:י-יב, טו · כד:סה-כה:ב */
+  function versesLoc(s, items) {
+    const sorted = [...items].sort((a, b) => a.c - b.c || a.v - b.v), runs = [];
+    const next = (x) => (x.v < book(s).verses[x.c - 1] ? { c: x.c, v: x.v + 1 } : { c: x.c + 1, v: 1 });
+    for (const x of sorted) {
+      const r = runs[runs.length - 1];
+      if (r) { const n = next(r.l); if (n.c === x.c && n.v === x.v) { r.l = x; continue; } }
+      runs.push({ f: x, l: x });
+    }
+    let lastC = null;
+    return runs.map(({ f, l }) => {
+      let t = f.c === lastC ? plainGem(f.v) : `${plainGem(f.c)}:${plainGem(f.v)}`;
+      if (l.c !== f.c) t += `-${plainGem(l.c)}:${plainGem(l.v)}`;
+      else if (l.v !== f.v) t += `-${plainGem(l.v)}`;
+      lastC = l.c;
+      return t;
+    }).join(", ");
+  }
   function blockRef(b) {
     const B = book(b.s).he;
     if (b.kind === "verse") {
-      const { first: f, last: l } = b;
-      let loc = `${plainGem(f.c)}:${plainGem(f.v)}`;
-      if (l.c !== f.c) loc += `-${plainGem(l.c)}:${plainGem(l.v)}`;
-      else if (l.v !== f.v) loc += `-${plainGem(l.v)}`;
+      const loc = versesLoc(b.s, b.items || [b.first, b.last]);
       return { html: esc(`(${B}, ${loc})`), plain: `(${B}, ${loc})` };
     }
     const name = `${commMeta(b.cid).he} על ${B}`;
@@ -2282,6 +2299,20 @@
     const html = [], plain = [];
     for (const b of blocks) {
       const ref = blockRef(b);
+      if (b.kind === "verse" && b.items && b.items.length > 1) {
+        // several pesukim: the reference, then each pasuk — its number in Hebrew, its Hebrew, then its English
+        const items = [...b.items].sort((a, c) => a.c - c.c || a.v - c.v);
+        const oneC = items.every((x) => x.c === items[0].c);
+        const num = (x) => `${oneC ? "" : plainGem(x.c) + ":"}${plainGem(x.v)}.`;
+        let h = `<p dir="rtl" style="direction:rtl;text-align:right;margin:0 0 6px">${ref.html}</p>`, t = `‏${ref.plain}`;
+        for (const x of items) {
+          h += `<p dir="rtl" style="direction:rtl;text-align:right;margin:0 0 2px">${esc(num(x))} ${esc(x.he)}</p>`;
+          t += `\n‏${num(x)} ${x.he}`;
+          if (both && x.en) { h += `<p dir="ltr" style="direction:ltr;text-align:left;margin:0 0 8px">${esc(x.en)}</p>`; t += `\n‎${x.en}`; }
+        }
+        html.push(h); plain.push(t);
+        continue;
+      }
       const he = b.he.filter(Boolean).join(" ");
       const en = both ? b.en.filter(Boolean).join(" ") : "";
       const enH = b.enDH && en.startsWith(b.enDH) ? `<b>${esc(b.enDH)}</b>${esc(en.slice(b.enDH.length))}` : esc(en);
@@ -2294,6 +2325,59 @@
       plain: plain.join("\n\n"),
       label: blocks.length ? blockRef(blocks[0]).plain + (blocks.length > 1 ? ` +${blocks.length - 1}` : "") : "",
     };
+  }
+
+  /* ── several pesukim picked for copying (copy mode: tap pesukim; in Pages, "Select" on the page) ── */
+  const picks = new Map();                       // "s:c:v" → {s, c, v}
+  const pickKey = (s, c, v) => `${s}:${c}:${v}`;
+  function togglePick(s, c, v) {
+    const k = pickKey(s, c, v);
+    if (picks.has(k)) picks.delete(k); else picks.set(k, { s, c, v });
+    paintPicks(); updateCopyBar();
+  }
+  function paintPicks() {
+    $$(".verse.picked").forEach((x) => { if (!picks.has(pickKey(x.dataset.s, +x.dataset.c, +x.dataset.v))) x.classList.remove("picked"); });
+    for (const p of picks.values()) { const row = $(`#v-${p.s}-${p.c}-${p.v}`); if (row) row.classList.add("picked"); }
+    const pp = $("#pgTop .pg-pasuk.cu");
+    if (pp) {
+      const on = picks.has(pickKey(pp.dataset.s, +pp.dataset.c, +pp.dataset.v));
+      pp.classList.toggle("picked", on);
+      const b = $("#pgTop .pg-pick"); if (b) { b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); const sp = $("span", b); if (sp) sp.textContent = on ? "Selected" : "Select"; }
+    }
+  }
+  function clearPicks() { picks.clear(); paintPicks(); updateCopyBar(); }
+  /* the picked pesukim between the first and the last picked one of each sefer, all of them */
+  function fillPicks() {
+    const bySefer = new Map();
+    for (const p of picks.values()) (bySefer.get(p.s) || bySefer.set(p.s, []).get(p.s)).push(p);
+    for (const [s, ps] of bySefer) {
+      ps.sort((a, b) => a.c - b.c || a.v - b.v);
+      let { c, v } = ps[0]; const L = ps[ps.length - 1], V = book(s).verses;
+      while (c < L.c || (c === L.c && v <= L.v)) { picks.set(pickKey(s, c, v), { s, c, v }); if (++v > V[c - 1]) { c++; v = 1; } }
+    }
+    paintPicks(); updateCopyBar();
+  }
+  const picksGaps = () => {
+    const bySefer = new Map();
+    for (const p of picks.values()) (bySefer.get(p.s) || bySefer.set(p.s, []).get(p.s)).push(p);
+    for (const [s, ps] of bySefer) {
+      ps.sort((a, b) => a.c - b.c || a.v - b.v);
+      const V = book(s).verses; let n = 0;
+      for (let c = ps[0].c; c <= ps[ps.length - 1].c; c++) n += (c === ps[ps.length - 1].c ? ps[ps.length - 1].v : V[c - 1]) - (c === ps[0].c ? ps[0].v - 1 : 0);
+      if (n > ps.length) return true;
+    }
+    return false;
+  };
+  function picksBlocks() {
+    const order = Object.keys(INDEX.books);
+    const units = [...picks.values()].sort((a, b) => order.indexOf(a.s) - order.indexOf(b.s) || a.c - b.c || a.v - b.v)
+      .map((p) => ({ kind: "verse", s: p.s, c: p.c, v: p.v, heSel: null, enSel: null }));
+    return buildBlocks(units);
+  }
+  function copyPicks() {
+    const slugs = [...new Set([...picks.values()].map((p) => p.s))];
+    if (slugs.every((x) => resolved.has(textUrl(x)))) { copyBlocks(picksBlocks()); return; }
+    Promise.allSettled(slugs.map((x) => loadText(x))).then(() => copyBlocks(picksBlocks()));
   }
 
   let pendingCopy = null;
@@ -2377,8 +2461,14 @@
     const btn = $("#copySelBtn");
     let label = "";
     if (savedRange) { try { const bl = buildBlocks(unitsFromRange(savedRange)); if (bl.length) label = formatCopy(bl).label; } catch {} }
+    const usePicks = !label && picks.size > 0;
+    if (usePicks) { try { const bl = picksBlocks(); label = bl.map((b) => blockRef(b).plain).join(" · "); } catch { label = ""; } }
     btn.disabled = !label;
-    const pv = $("#copyPreview"); pv.textContent = label || "Select text, or tap the copy icon on a pasuk or comment"; pv.dir = label ? "rtl" : "ltr";
+    btn.innerHTML = usePicks ? (picks.size > 1 ? `Copy ${picks.size}<span class="cb-l"> pesukim</span>` : `Copy<span class="cb-l"> pasuk</span>`) : "Copy";
+    $("#copyFill").hidden = !(usePicks && picksGaps());
+    $("#copyClear").hidden = !picks.size;
+    const hint = PG ? "Select pesukim on their pages, or tap the copy icon" : "Tap pesukim to select them, or select text";
+    const pv = $("#copyPreview"); pv.textContent = label || hint; pv.dir = label ? "rtl" : "ltr";
     $$("#copybar .seg button").forEach((b) => b.classList.toggle("on", b.dataset.v === settings.copyFmt));
   }
 
@@ -2388,8 +2478,10 @@
     $("#copybar").hidden = !on;
     $("#copyModeBtn").classList.toggle("active", on);
     $("#copyModeBtn").setAttribute("aria-pressed", String(on));
-    savedRange = null; updateCopyBar();
-    if (on) { preloadForCopy(); toast("Copy mode on"); }
+    savedRange = null;
+    if (!on) { picks.clear(); paintPicks(); }
+    updateCopyBar();
+    if (on) { preloadForCopy(); toast("Copy mode on — tap pesukim to select them"); }
     if (PG) requestAnimationFrame(() => pagerLayout(true));
   }
 
@@ -2904,8 +2996,11 @@
     $("#copyExit").addEventListener("click", () => setCopyMode(false));
     $("#copySelBtn").addEventListener("pointerdown", (e) => { copyBtnDownAt = Date.now(); e.preventDefault(); });
     $("#copySelBtn").addEventListener("mousedown", (e) => e.preventDefault());
+    $("#copyFill").addEventListener("click", fillPicks);
+    $("#copyClear").addEventListener("click", clearPicks);
     $("#copySelBtn").addEventListener("click", () => {
       const r = selectionInContent(window.getSelection()) || savedRange;
+      if (!r && picks.size) { copyPicks(); return; }
       if (!r) { toast("Select some text first"); return; }
       if (readerState && !copyReady(readerState.slug)) { preloadForCopy().then(() => copyBlocks(buildBlocks(unitsFromRange(r)))); return; }
       copyBlocks(buildBlocks(unitsFromRange(r)));
