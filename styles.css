@@ -228,6 +228,13 @@ body.copy-mode .pg-tools .pg-pick { display: inline-flex; }
 .pc-he { font-family: var(--f-he); direction: rtl; text-align: right; font-size: 1.22rem; line-height: 1.75; margin-top: 4px; }
 .pc-en { font-family: var(--f-en); font-size: 1.02rem; line-height: 1.5; color: var(--ink-2); margin-top: 4px; }
 .pc-en .footnote, .pc-en sup { display: none; }
+/* favourites and bookmarks, divided Torah / Nevi'im / Ketuvim / Chitzonim */
+.saved-group + .saved-group { margin-top: 14px; }
+.saved-label { padding: 0 2px 6px; }
+.saved-label .en small { font-size: .66rem; letter-spacing: 0; color: var(--ink-3); margin-inline-start: 6px; }
+.saved-more { display: block; margin: 8px auto 0; border: 1px solid var(--rule); background: var(--card); color: var(--ink-2);
+  border-radius: 999px; padding: 4px 14px; font: inherit; font-size: .82rem; cursor: pointer; }
+.saved-more:hover { border-color: var(--gold); color: var(--accent); }
 .pc-he .mam-spi-pe, .pc-he .mam-spi-samekh, .pc-he .mam-kq-trivial { display: none; }
 .pc-he .mam-kq-k { color: var(--ink-3); font-size: .85em; }.pc-he small, .pc-he b { font-size: .7em; font-weight: inherit; color: var(--ink-3); }
 
@@ -342,6 +349,7 @@ body.copy-mode .pg-tools .pg-pick { display: inline-flex; }
 .v-btn:hover { color: var(--accent); background: var(--paper-2); }
 .v-btn.on { color: var(--accent); }
 .v-btn.on svg path { fill: currentColor; }
+.v-btn.fav-btn.on, .pg-tools .pg-fav.on { color: var(--gold); }
 .rashi-pill {
   display: inline-flex; align-items: center; gap: 3px; cursor: pointer;
   border: 1px solid color-mix(in srgb, var(--gold) 55%, transparent); background: transparent; color: var(--gold);
@@ -894,7 +902,7 @@ body.pages-mode .site-footer { display: none; }
 .pg-tools button { border: 0; background: none; color: var(--ink-3); padding: 3px; border-radius: 6px; cursor: pointer; display: grid; place-items: center; }
 .pg-tools button:hover { color: var(--accent); background: var(--paper-2); }
 .pg-tools .pg-bm.on { color: var(--accent); }
-.pg-tools .pg-bm.on svg path { fill: currentColor; }
+.pg-tools .pg-bm.on svg path, .pg-tools .pg-fav.on svg path { fill: currentColor; }
 .pg-head .he a { color: inherit; text-decoration: none; border-bottom: 1px dotted currentColor; }
 /* haftarah pages */
 .pg-haft-head { border-bottom: 1px solid var(--rule); padding-bottom: 4px; margin-bottom: 4px; }

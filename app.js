@@ -54,6 +54,7 @@
   if (settings.inlineRashi) settings.rashiOpen = true;
   delete settings.inlineRashi; delete settings.panel; delete settings.scale;   // text size is now fixed to the standard
   let bookmarks = store.get("bookmarks", []);
+  let favourites = store.get("favourites", []);
   let copyMode = false;
 
   /* ───────── Helpers ───────── */
@@ -309,6 +310,11 @@
         ${last && last.s ? `<section class="section">${head("Continue reading", "המשך קריאה")}<div id="continueSlot" class="pcards one"></div></section>` : ""}
 
         <section class="section">
+          ${head("Favourites", "מועדפים")}
+          <div id="favList"></div>
+        </section>
+
+        <section class="section">
           ${head("Bookmarks", "סימניות")}
           <div id="bmList"></div>
         </section>
@@ -338,7 +344,7 @@
       </div>`;
     renderWeek();
     renderContinue(last);
-    renderBookmarks();
+    renderSaved();
     $$("[data-book]", app).forEach((b) => b.addEventListener("click", () => openPicker(b.dataset.book)));
     window.scrollTo(0, 0);
   }
@@ -383,7 +389,8 @@
       <div class="pc-ref"><span class="en">${esc(refEn(slug, c, v))}</span><span class="he">${esc(refHe(slug, c, v))}</span></div>
       <div class="pc-he">${he}</div>
       <div class="pc-en">${en}</div>
-      ${removable ? `<button class="icon-btn pc-rm" type="button" data-rm="${slug}:${c}:${v}" aria-label="Remove bookmark" title="Remove bookmark">${iconX}</button>` : ""}
+      ${removable === "fav" ? `<button class="icon-btn pc-rm" type="button" data-rmf="${slug}:${c}:${v}" aria-label="Remove from favourites" title="Remove from favourites">${iconX}</button>`
+        : removable ? `<button class="icon-btn pc-rm" type="button" data-rm="${slug}:${c}:${v}" aria-label="Remove bookmark" title="Remove bookmark">${iconX}</button>` : ""}
     </div>`;
   }
   function wireCards(root) {
@@ -409,42 +416,70 @@
     wireCards(slot);
   }
 
-  async function renderBookmarks() {
-    const el = $("#bmList"); if (!el) return;
-    if (!bookmarks.length) { el.innerHTML = `<p class="empty">No saved pesukim yet — open the reader and tap the bookmark icon beside any pasuk.</p>`; return; }
-    const list = bookmarks.filter((b) => INDEX.books[b.b]).slice().sort((a, b) => b.t - a.t);
-    const texts = {};
-    await Promise.all([...new Set(list.map((b) => b.b))].map((s) => loadText(s).then((t) => (texts[s] = t)).catch(() => {})));
-    if (!$("#bmList")) return;
-    const comms = {};
-    await Promise.all(list.filter((bm) => bm.cid && commMeta(bm.cid)).map(async (bm) => {
-      const k = `${bm.cid}:${bm.b}`; if (comms[k]) return;
-      try { comms[k] = { he: await loadComm(bm.cid, bm.b), en: commMeta(bm.cid).enDir ? await loadCommEn(bm.cid, bm.b).catch(() => null) : null }; } catch {}
-    }));
-    if (!$("#bmList")) return;
-    el.innerHTML = `<div class="pcards">${list.filter((bm) => texts[bm.b]).map((bm) => {
-      if (!bm.cid) return pasukCard({ slug: bm.b, c: bm.c, v: bm.v, text: texts[bm.b], href: chapterHash(bm.b, bm.c, bm.v), removable: true });
-      const d = comms[`${bm.cid}:${bm.b}`]; if (!d) return "";
-      const he = at(d.he, bm.c, bm.v)[bm.i]; if (!he) return "";
-      const en = d.en ? at(d.en, bm.c, bm.v)[bm.i] || "" : "";
-      const m = commMeta(bm.cid);
-      return `<div class="pcard ccard" data-href="${esc(chapterHash(bm.b, bm.c, bm.v))}" data-cm="${bm.cid}:${bm.b}:${bm.c}:${bm.v}:${bm.i}" tabindex="0" role="link">
+  /* Favourites and bookmarks on the home page, each divided into Torah, Nevi'im, Ketuvim and Sefarim Chitzonim,
+     in the order of the sefarim; a long group shows its first few with "Show all" */
+  const SAVED_CAP = 6;
+  const savedOpen = new Set();             // groups shown in full, e.g. "fav:torah"
+  const commRank = (cid) => { const i = COMMENTARIES.findIndex((m) => m.id === cid); return i < 0 ? 99 : i; };
+  const savedSort = (a, b) => ORDER.indexOf(a.b) - ORDER.indexOf(b.b) || a.c - b.c || a.v - b.v
+    || (a.cid ? 1 : 0) - (b.cid ? 1 : 0) || commRank(a.cid) - commRank(b.cid) || (a.i || 0) - (b.i || 0);
+  function savedCard(kind, bm, texts, comms) {
+    if (!texts[bm.b]) return "";
+    if (!bm.cid) return pasukCard({ slug: bm.b, c: bm.c, v: bm.v, text: texts[bm.b], href: chapterHash(bm.b, bm.c, bm.v), removable: kind });
+    const d = comms[`${bm.cid}:${bm.b}`]; if (!d) return "";
+    const he = at(d.he, bm.c, bm.v)[bm.i]; if (!he) return "";
+    const en = d.en ? at(d.en, bm.c, bm.v)[bm.i] || "" : "";
+    const m = commMeta(bm.cid);
+    return `<div class="pcard ccard" data-href="${esc(chapterHash(bm.b, bm.c, bm.v))}" data-cm="${bm.cid}:${bm.b}:${bm.c}:${bm.v}:${bm.i}" tabindex="0" role="link">
         <div class="pc-label"><span>${esc(m.en)}</span><span class="he">${m.he}</span></div>
         <div class="pc-ref"><span class="en">${esc(refEn(bm.b, bm.c, bm.v))}</span><span class="he">${esc(refHe(bm.b, bm.c, bm.v))}</span></div>
         <div class="pc-he pc-comm">${heComm(he)}</div>
         ${en ? `<div class="pc-en pc-comm-en">${en}</div>` : ""}
         <button class="icon-btn pc-rm" type="button" data-rmc="${bm.cid}:${bm.b}:${bm.c}:${bm.v}:${bm.i}" aria-label="Remove bookmark" title="Remove bookmark">${iconX}</button>
       </div>`;
-    }).join("")}</div>`;
-    wireCards(el);
-    $$("[data-rm]", el).forEach((b) => b.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const [s, c, v] = b.dataset.rm.split(":"); removeBookmark(s, +c, +v); renderBookmarks();
+  }
+  function savedGroups(kind, list, texts, comms) {
+    const sorted = list.slice().sort(savedSort);
+    return INDEX.sections.map((sec) => {
+      const cards = sorted.filter((x) => book(x.b).section === sec.id).map((x) => savedCard(kind, x, texts, comms)).filter(Boolean);
+      if (!cards.length) return "";
+      const key = `${kind}:${sec.id}`, all = savedOpen.has(key);
+      return `<div class="saved-group">
+          <div class="group-label saved-label"><span class="en">${esc(sec.en)}<small>${cards.length}</small></span><span class="he">${esc(sec.he)}</span></div>
+          <div class="pcards">${(all ? cards : cards.slice(0, SAVED_CAP)).join("")}</div>
+          ${cards.length > SAVED_CAP ? `<button type="button" class="saved-more" data-more="${key}">${all ? "Show fewer" : `Show all ${cards.length}`}</button>` : ""}
+        </div>`;
+    }).join("");
+  }
+  const EMPTY_FAV = `<p class="empty">No favourites yet — tap the star beside any pasuk.</p>`;
+  const EMPTY_BM = `<p class="empty">No saved pesukim yet — open the reader and tap the bookmark icon beside any pasuk.</p>`;
+  async function renderSaved() {
+    const favEl = $("#favList"), bmEl = $("#bmList"); if (!favEl || !bmEl) return;
+    const favs = favourites.filter((f) => INDEX.books[f.b]), bms = bookmarks.filter((b) => INDEX.books[b.b]);
+    if (!favs.length) favEl.innerHTML = EMPTY_FAV;
+    if (!bms.length) bmEl.innerHTML = EMPTY_BM;
+    if (!favs.length && !bms.length) return;
+    const texts = {}, comms = {};
+    await Promise.all([...new Set([...favs, ...bms].map((b) => b.b))].map((sl) => loadText(sl).then((t) => (texts[sl] = t)).catch(() => {})));
+    await Promise.all(bms.filter((bm) => bm.cid && commMeta(bm.cid)).map(async (bm) => {
+      const k = `${bm.cid}:${bm.b}`; if (comms[k]) return; comms[k] = null;
+      try { comms[k] = { he: await loadComm(bm.cid, bm.b), en: commMeta(bm.cid).enDir ? await loadCommEn(bm.cid, bm.b).catch(() => null) : null }; } catch {}
     }));
-    $$("[data-rmc]", el).forEach((b) => b.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const [cid, s, c, v, i] = b.dataset.rmc.split(":"); removeCommBm(cid, s, +c, +v, +i); renderBookmarks();
-    }));
+    if (!favEl.isConnected) return;
+    favEl.innerHTML = favs.length ? savedGroups("fav", favs, texts, comms) || EMPTY_FAV : EMPTY_FAV;
+    bmEl.innerHTML = bms.length ? savedGroups("bm", bms, texts, comms) || EMPTY_BM : EMPTY_BM;
+    for (const el of [favEl, bmEl]) {
+      wireCards(el);
+      el.onclick = (e) => {
+        const b = e.target.closest("[data-rm], [data-rmc], [data-rmf], [data-more]"); if (!b) return;
+        e.stopPropagation();
+        if (b.dataset.more) { const k = b.dataset.more; if (savedOpen.has(k)) savedOpen.delete(k); else savedOpen.add(k); }
+        else if (b.dataset.rmf) { const [sl, c, v] = b.dataset.rmf.split(":"); removeFav(sl, +c, +v); }
+        else if (b.dataset.rm) { const [sl, c, v] = b.dataset.rm.split(":"); removeBookmark(sl, +c, +v); }
+        else { const [cid, sl, c, v, i] = b.dataset.rmc.split(":"); removeCommBm(cid, sl, +c, +v, +i); }
+        renderSaved();
+      };
+    }
   }
 
   /* ───────── Bookmarks ───────── */
@@ -475,16 +510,34 @@
     const cr = $(`.rrow[data-cid="${pc.cid}"][data-i="${pc.i}"]`, row);
     if (cr) { cr.classList.remove("flash"); void cr.offsetWidth; cr.classList.add("flash"); }
   }
-  function toggleBookmark(s, c, v, btn) {
-    if (isBookmarked(s, c, v)) { removeBookmark(s, c, v); btn && btn.classList.remove("on"); toast("Bookmark removed"); return; }
+  function toggleBookmark(s, c, v) {
+    if (isBookmarked(s, c, v)) { removeBookmark(s, c, v); syncMarks(s, c, v); toast("Bookmark removed"); return; }
     bookmarks.push({ b: s, c, v, t: Date.now() });
     store.set("bookmarks", bookmarks);
-    btn && btn.classList.add("on");
+    syncMarks(s, c, v);
     toast(`Saved ${refEn(s, c, v)}`);
+  }
+
+  /* ───────── Favourites (a star on each pasuk) ───────── */
+  const isFav = (s, c, v) => favourites.some((f) => f.b === s && f.c === c && f.v === v);
+  function removeFav(s, c, v) { favourites = favourites.filter((f) => !(f.b === s && f.c === c && f.v === v)); store.set("favourites", favourites); }
+  function toggleFav(s, c, v) {
+    if (isFav(s, c, v)) { removeFav(s, c, v); syncMarks(s, c, v); toast("Removed from favourites"); return; }
+    favourites.push({ b: s, c, v, t: Date.now() });
+    store.set("favourites", favourites);
+    syncMarks(s, c, v);
+    toast(`★ ${refEn(s, c, v)} added to favourites`);
+  }
+  /* every button for this pasuk shows its state (Scroll rows and Pages are both kept in memory) */
+  function syncMarks(s, c, v) {
+    const sel = `[data-s="${s}"][data-c="${c}"][data-v="${v}"]`, bm = isBookmarked(s, c, v), fv = isFav(s, c, v);
+    $$(`.verse${sel} .bm-btn, .pg-bm${sel}`).forEach((b) => b.classList.toggle("on", bm));
+    $$(`.verse${sel} .fav-btn, .pg-fav${sel}`).forEach((b) => { b.classList.toggle("on", fv); b.setAttribute("aria-pressed", String(fv)); });
   }
 
   /* ───────── Reader ───────── */
   const iconBookmark = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6.5 3.5h11v17l-5.5-4-5.5 4z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>`;
+  const iconStar = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>`;
   const iconCopy = `<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="8.5" y="8.5" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M15.5 5.5v-1a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 4.5V14A1.5 1.5 0 0 0 6 15.5h1" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>`;
 
   function segmentsFor(r) {
@@ -700,7 +753,7 @@
     return { top, body: commentaryBody(s, c, v, reg) };
   }
   function pgTools(s, c, v) {
-    return `<span class="pg-tools"><button type="button" class="pg-bm ${isBookmarked(s, c, v) ? "on" : ""}" data-s="${s}" data-c="${c}" data-v="${v}" aria-label="Bookmark" title="Bookmark">${iconBookmark}</button><button type="button" class="pg-copy" aria-label="Copy this pasuk" title="Copy this pasuk">${iconCopy}</button><button type="button" class="pg-pick ${picks.has(pickKey(s, c, v)) ? "on" : ""}" data-s="${s}" data-c="${c}" data-v="${v}" aria-pressed="${picks.has(pickKey(s, c, v))}" title="Select this pasuk to copy with others"><svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><rect x="3" y="3" width="14" height="14" rx="3.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path class="tick" d="M6.5 10.2l2.4 2.4 4.6-5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg><span>${picks.has(pickKey(s, c, v)) ? "Selected" : "Select"}</span></button></span>`;
+    return `<span class="pg-tools"><button type="button" class="pg-bm ${isBookmarked(s, c, v) ? "on" : ""}" data-s="${s}" data-c="${c}" data-v="${v}" aria-label="Bookmark" title="Bookmark">${iconBookmark}</button><button type="button" class="pg-fav ${isFav(s, c, v) ? "on" : ""}" data-s="${s}" data-c="${c}" data-v="${v}" aria-pressed="${isFav(s, c, v)}" aria-label="Favourite" title="Favourite">${iconStar}</button><button type="button" class="pg-copy" aria-label="Copy this pasuk" title="Copy this pasuk">${iconCopy}</button><button type="button" class="pg-pick ${picks.has(pickKey(s, c, v)) ? "on" : ""}" data-s="${s}" data-c="${c}" data-v="${v}" aria-pressed="${picks.has(pickKey(s, c, v))}" title="Select this pasuk to copy with others"><svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><rect x="3" y="3" width="14" height="14" rx="3.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path class="tick" d="M6.5 10.2l2.4 2.4 4.6-5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg><span>${picks.has(pickKey(s, c, v)) ? "Selected" : "Select"}</span></button></span>`;
   }
   function commentaryBody(s, c, v, reg) {
     let body = "";
@@ -857,7 +910,9 @@
     $("#pgStage").addEventListener("click", (e) => {
       if (PG.swiped) return;
       const bm = e.target.closest(".pg-bm");
-      if (bm) { toggleBookmark(bm.dataset.s, +bm.dataset.c, +bm.dataset.v, bm); return; }
+      if (bm) { toggleBookmark(bm.dataset.s, +bm.dataset.c, +bm.dataset.v); return; }
+      const fv = e.target.closest(".pg-fav");
+      if (fv) { toggleFav(fv.dataset.s, +fv.dataset.c, +fv.dataset.v); return; }
       const cp = e.target.closest(".pg-copy");
       if (cp) { const u = $("#pgTop .pg-pasuk.cu"); if (u) copyUnit(u); return; }
       const pk = e.target.closest(".pg-pick");
@@ -1758,13 +1813,14 @@
   function verseRow(slug, c, v, text) {
     const he = heText(text.he[c - 1][v - 1] || "");
     const en = text.en[c - 1][v - 1] || "";
-    const on = isBookmarked(slug, c, v);
+    const on = isBookmarked(slug, c, v), fv = isFav(slug, c, v);
     return `<div class="verse cu${picks.has(pickKey(slug, c, v)) ? " picked" : ""}" data-kind="verse" id="v-${slug}-${c}-${v}" data-s="${slug}" data-c="${c}" data-v="${v}">
       <div class="v-he cu-he">${he}</div>
       <div class="v-num no-copy">
         <span class="n-he">${gematria(v)}</span><span class="n-en">${v}</span>
         <span class="v-tools">
           <button class="v-btn bm-btn ${on ? "on" : ""}" type="button" aria-label="Bookmark ${esc(refEn(slug, c, v))}" title="Bookmark">${iconBookmark}</button>
+          <button class="v-btn fav-btn ${fv ? "on" : ""}" type="button" aria-pressed="${fv}" aria-label="Favourite ${esc(refEn(slug, c, v))}" title="Favourite">${iconStar}</button>
           <button class="v-btn unit-copy" type="button" aria-label="Copy ${esc(refEn(slug, c, v))}" title="Copy this pasuk">${iconCopy}</button>
         </span>
       </div>
@@ -2133,7 +2189,9 @@
     const row = e.target.closest(".verse"); if (!row) return;
     const s = row.dataset.s, c = +row.dataset.c, v = +row.dataset.v;
     const bm = e.target.closest(".bm-btn");
-    if (bm) { e.stopPropagation(); toggleBookmark(s, c, v, bm); return; }
+    if (bm) { e.stopPropagation(); toggleBookmark(s, c, v); return; }
+    const fv = e.target.closest(".fav-btn");
+    if (fv) { e.stopPropagation(); toggleFav(s, c, v); return; }
     const cbm = e.target.closest(".c-bm");
     if (cbm) { e.stopPropagation(); const cr = cbm.closest(".rrow"); toggleCommBm(cr.dataset.cid, cr.dataset.s, +cr.dataset.c, +cr.dataset.v, +cr.dataset.i, cbm); return; }
     if (e.target.closest(".rashi-pill")) { toggleRashi(row); markSelected(s, c, v); return; }
