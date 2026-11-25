@@ -1385,7 +1385,7 @@
       later(step);
     };
     const later = (f) => window.requestIdleCallback ? requestIdleCallback(f, { timeout: 250 }) : setTimeout(f, 20);
-    (layoutSwitch || Promise.resolve()).then(() => setTimeout(() => later(step), layoutSwitch ? 200 : 60));
+    (layoutSwitch || Promise.resolve()).then(() => setTimeout(() => later(step), layoutSwitch ? 900 : 60));
   }
   /* render every perek between what's shown and c (used when jumping within the sefer) */
   function ensurePerek(c) {
@@ -2746,18 +2746,19 @@
     quietShow = true;
     const slow = setTimeout(() => toast("Loading…"), 450);
     try {
-      // the veil rises straight away; the data (usually already in memory) is checked meanwhile
+      // everything the other layout needs is in memory first (the page you're on stays as it is meanwhile); then
+      // the swap is made in one go — the next frame shows the other layout at the same place. No sheet fades over
+      // the page (that was a blink of its own), and nothing is seen half drawn.
       const pos = settings.view === "pages" && readerState && !PG ? (switchPos = switchTarget()) : null;
-      await Promise.all([veilTo(true, 60, false), Promise.allSettled(jobs).then(() => { mark("data"); if (pos && !pos.haft && warmKey !== `${pos.s}:${pos.c}:${pos.v}`) warmPasuk(pos.s, pos.c, pos.v); })]);
+      await Promise.allSettled(jobs);
+      mark("data");
+      if (pos && !pos.haft && warmKey !== `${pos.s}:${pos.c}:${pos.v}`) warmPasuk(pos.s, pos.c, pos.v);
       clearTimeout(slow);
       mark("hidden");
       await update();
-      void $("#app").offsetHeight;       // laid out and scrolled into place before the veil lifts
-      await frames(2);                    // …and painted
       mark("updated");
     } finally {
       quietShow = false; clearTimeout(slow);
-      await veilTo(false, 130, false);
       mark("done"); done(); layoutSwitch = null;
     }
   }
@@ -2876,7 +2877,6 @@
     $("#copyModeBtn").addEventListener("click", () => setCopyMode(!copyMode));
     $("#layoutBtn").addEventListener("click", () => {
       settings.view = settings.view === "pages" ? "scroll" : "pages"; saveSettings();
-      toast(settings.view === "pages" ? "Pages — one pasuk per page" : "Scroll — the whole sefer");
       afterSettingChange("view");
     });
     $("#aliyahBtn").addEventListener("click", openAliyahMenu);

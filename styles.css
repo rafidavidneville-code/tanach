@@ -66,6 +66,9 @@ button { font: inherit; color: inherit; }
   display: flex; align-items: center; gap: 12px; padding: 0 16px;
   background: var(--paper);
   border-bottom: 1px solid var(--rule);
+  /* a layer of its own: the page scrolling or being redrawn under it (Safari on iPad moves the page itself when
+     the sefer fills in above) never makes Safari redraw the bar */
+  transform: translateZ(0); -webkit-backface-visibility: hidden; backface-visibility: hidden;
 }
 body { padding-top: var(--topbar-h); }
 .brand { display: flex; align-items: baseline; gap: 8px; text-decoration: none; flex-shrink: 0; }
