@@ -1616,8 +1616,10 @@
     const al = pos && pos.haft ? "הפטרה" : st && st.he ? st.he : "עליה";
     // only what changed is written: the bar is not redrawn on every scroll
     if (lbl.textContent !== al) lbl.textContent = al;
-    // Pages: the parsha you're in gets its own label on the top bar
-    const tp = $("#topParsha"), showP = !!(PG && p);
+    // the parsha you're in gets its own label on the top bar — in Pages, and in Scroll too where the bar has room
+    // (tablets and wider), so the bar is the same in both layouts and doesn't change when you switch
+    const wide = !window.matchMedia || matchMedia("(min-width: 561px)").matches;
+    const tp = $("#topParsha"), showP = !!(p && (PG || wide));
     if (tp.hidden !== !showP) tp.hidden = !showP;
     if (showP && tp.textContent !== `פרשת ${p.he}`) tp.textContent = `פרשת ${p.he}`;
     if (document.body.classList.contains("has-parsha") !== showP) document.body.classList.toggle("has-parsha", showP);
@@ -2699,10 +2701,12 @@
      and a page drawn first and moved after is a jump. The parts of the top bar that change fade with it. */
   const reduceMotion = () => !!(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches);
   let veilUp = false;
-  function veilTo(on, ms) {
+  function veilTo(on, ms, fadeBar = true) {
     let v = document.getElementById("veil");
     if (!v) { v = document.createElement("div"); v.id = "veil"; v.setAttribute("aria-hidden", "true"); document.body.append(v); }
-    const nav = $(".nav-center");
+    // the centre of the top bar fades with the sheet when what it shows changes (Home ⇄ a sefer); switching
+    // Scroll ⇄ Pages it shows the same place before and after, so it stays perfectly still
+    const nav = fadeBar || !on ? $(".nav-center") : null;
     if (reduceMotion()) ms = 0;
     veilUp = on;
     return new Promise((res) => {
@@ -2744,7 +2748,7 @@
     try {
       // the veil rises straight away; the data (usually already in memory) is checked meanwhile
       const pos = settings.view === "pages" && readerState && !PG ? (switchPos = switchTarget()) : null;
-      await Promise.all([veilTo(true, 60), Promise.allSettled(jobs).then(() => { mark("data"); if (pos && !pos.haft && warmKey !== `${pos.s}:${pos.c}:${pos.v}`) warmPasuk(pos.s, pos.c, pos.v); })]);
+      await Promise.all([veilTo(true, 60, false), Promise.allSettled(jobs).then(() => { mark("data"); if (pos && !pos.haft && warmKey !== `${pos.s}:${pos.c}:${pos.v}`) warmPasuk(pos.s, pos.c, pos.v); })]);
       clearTimeout(slow);
       mark("hidden");
       await update();
@@ -2753,7 +2757,7 @@
       mark("updated");
     } finally {
       quietShow = false; clearTimeout(slow);
-      await veilTo(false, 130);
+      await veilTo(false, 130, false);
       mark("done"); done(); layoutSwitch = null;
     }
   }
