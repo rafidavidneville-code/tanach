@@ -1003,6 +1003,8 @@
     // as in a sefer: in place in the first frame, kept there while Rashi is painted
     let spot = null;
     if (!pendingAnchor && !r.haft) { if (target) selectVerse(slug, r.c, r.v, { scroll: true }); else window.scrollTo(0, 0); spot = captureSpot(); }
+    else if (pendingAnchor) { const a = pendingAnchor, row = $(`#v-${a.s}-${a.c}-${a.v}`); if (row) window.scrollTo(0, row.getBoundingClientRect().top + window.scrollY - a.top); }
+    else { const h = $(`#haft-${r.p.id}`); if (h) h.scrollIntoView({ block: "start" }); }
     await decorateCommentary();
     preloadForCopy();
     if (pendingAnchor) restoreAnchor();
@@ -1064,19 +1066,22 @@
       else if (c0 > 1) $(`#perek-${slug}-${c0}`).scrollIntoView({ block: "start" });
       else window.scrollTo(0, 0);
     };
-    // Everything that gives the perakim their heights goes in before the page is placed — aliyah headings, and
-    // Rashi when it's already in memory (a microtask, not a frame: nothing is seen before it's in place) — so
-    // nothing moves after it's placed. Otherwise the page is put in place in the same frame its text arrives (it
-    // is never seen at the top of the sefer first), and that place is kept while Rashi is painted in.
+    // The page is put in its place in the same task its text arrives, before anything that waits — so it is never
+    // seen at the top of the sefer first: the pasuk asked for, or the place being restored (coming back to the
+    // site, switching from Pages), or the haftarah card. The aliyah headings go in first; Rashi is painted after,
+    // and that place is kept while it is (when Rashi is in memory that's the same task, so nothing is seen moving).
     afterInsert($$(".perek", body), false);
-    const cm = commMeta(st.tab);
-    const ready = resolved.has(commUrl(st.tab, slug)) && (!settings.rashiEn || !cm.enDir || resolved.has(commEnUrl(st.tab, slug))) &&
-      !(settings.rashiLines && settings.rashiEn && !LEX);
-    if (ready) { await decorateCommentary(); if (readerState !== st) return; }
     const early = !pendingAnchor && !pendingHaftOpen;
     let spot = null;
     if (early) { place(); spot = captureSpot(); }
-    if (!ready) { await decorateCommentary(); if (readerState !== st) return; }   // loads Rashi once for the sefer
+    else {
+      const a = pendingAnchor, row = a && $(`#v-${a.s}-${a.c}-${a.v}`), card = pendingHaftOpen && $(`#haft-${pendingHaftOpen}`);
+      if (row) window.scrollTo(0, row.getBoundingClientRect().top + window.scrollY - a.top);
+      else if (card) card.scrollIntoView({ block: "start" });
+      else if (a && a.c) { const pk = $(`#perek-${slug}-${a.c}`); if (pk) pk.scrollIntoView({ block: "start" }); }
+    }
+    await decorateCommentary();            // loads Rashi once for the sefer, paints these perakim
+    if (readerState !== st) return;
     if (pendingHaftOpen) {
       const el = $(`#haft-${pendingHaftOpen}`); pendingHaftOpen = null;
       if (el) { el.classList.add("full"); el.classList.remove("card"); await fillHaftarah(el, true); if (readerState !== st) return; st.rowsDirty = true; }
