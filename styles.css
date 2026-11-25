@@ -261,22 +261,18 @@ body.copy-mode .pg-tools .pg-pick { display: inline-flex; }
 .pill.on { color: var(--accent); border-color: var(--accent); }
 .pill.on::before { background: var(--accent); }
 
-/* continuous sefer: the page manages its own scroll position while perakim are added */
-
-/* Where the browser has scroll anchoring it keeps your place (see the sizer in app.js); the page does it only where
-   the browser can't. The top bar (and copy bar) are kept out of the "viewing region" (scroll-padding, set from
-   app.js to their height), so the browser anchors to the pasuk you're reading, not to one hidden under the bar —
-   and scrolling to a perek, aliyah or haftarah lands just below them (their scroll margins are only the gap). */
+/* Scroll: the page keeps your place itself (see win in app.js) — every change that moves what's above you is made
+   up for in the same moment. The browser's own scroll anchoring is off, so the place is never kept twice. The top
+   bar (and copy bar) are kept out of the "viewing region" (scroll-padding, set from app.js to their height), so
+   scrolling to a perek, aliyah or haftarah lands just below them (their scroll margins are only the gap). */
+html, body { overflow-anchor: none; }
 .perek { scroll-margin-top: 6px; }
 /* every perek heading in a sefer has the same margin (nothing changes size as perakim are added above),
    and the sefer itself sits 28px higher so the very first heading is 18px down */
 .sefer .chapter-head { margin-top: 46px; }
 .sefer { margin-top: -28px; }
-/* a perek far from the screen is skipped (not styled or laid out) and holds a size of its own — see the sizer in
-   app.js. flow-root: margins stay inside the perek whether it is drawn or skipped, so its size is the same both ways */
-.sefer > .perek.cv { display: flow-root; content-visibility: auto; }
-.sefer > .perek.cv.cv-on { content-visibility: visible; }
-#sbPad { height: 0; }
+/* flow-root: a perek's margins stay inside it, so its height is all of it (perakim are added and let go whole) */
+.sefer > .perek { display: flow-root; }
 
 /* parasha petucha / setuma — the gaps in a Sefer Torah */
 .ps-break { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 0 10px; }

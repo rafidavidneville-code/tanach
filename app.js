@@ -8,6 +8,9 @@
                   #parsha-<id>[-<ch>-<v>] → parsha */
 (() => {
   "use strict";
+  /* the page puts you back in your place itself (on the same pasuk); the browser restoring an old scroll position on
+     a reload or a return — at a moment of its own choosing, into a page that is laid out differently — would move it */
+  try { if ("scrollRestoration" in history) history.scrollRestoration = "manual"; } catch {}
 
   /* ───────── Commentaries registry (add more here later) ───────── */
   const COMMENTARIES = [
@@ -115,6 +118,7 @@
   const nbBook = (slug, d) => { const s = ORDER[ORDER.indexOf(slug) + d]; return s && canon(s) === canon(slug) ? s : null; };
   const cache = new Map();      // url → promise
   const resolved = new Map();   // url → data (sync access for copy)
+  const MISSING = new Set();    // urls that don't exist (404)
   /* memory: the data of the sefarim used last is kept, older ones are let go (a lighter page is less likely
      to be closed by the iPad while it is in the background) */
   const recentSlugs = [];
@@ -132,7 +136,7 @@
   function fetchJSON(url) {
     const sl = slugOf(url); if (sl) touchSlug(sl);
     if (!cache.has(url)) cache.set(url, fetch(url)
-      .then((r) => { if (!r.ok) throw new Error(r.status + " " + url); return r.json(); })
+      .then((r) => { if (!r.ok) { if (r.status === 404) MISSING.add(url); throw new Error(r.status + " " + url); } return r.json(); })
       .then((d) => { resolved.set(url, d); return d; })
       .catch((e) => { cache.delete(url); throw e; }));
     return cache.get(url);
@@ -636,6 +640,7 @@
     else if (r.c === 1) idx = 0;
     else idx = items.findIndex((it) => it.type === "pasuk" && it.c === r.c);
     PG.idx = Math.max(0, idx);
+    setPicker(r);
     app.textContent = "";
     document.body.classList.add("pages-mode");
     app.innerHTML = `
@@ -992,7 +997,8 @@
       if (settings.haftarah && b.section === "torah") {
         // a parsha ends here → its haftarah follows (full in parsha view, a card in the sefer)
         const ending = INDEX.parshiot.find((p) => p.range[0] === slug && p.range[3] === c && p.range[4] === v);
-        if (ending && (!isParsha || ending === r.p)) rows += `<section class="haftarah ${isParsha ? "full" : "card"}" id="haft-${ending.id}" data-p="${ending.id}"></section>`;
+        const full = isParsha || (readerState && readerState.haftFull && readerState.haftFull.has(ending && ending.id));
+        if (ending && (!isParsha || ending === r.p)) rows += `<section class="haftarah ${full ? "full" : "card"}" id="haft-${ending.id}" data-p="${ending.id}"></section>`;
       }
     }
     return rows;
@@ -1000,38 +1006,55 @@
 
   async function renderReader(r) {
     const app = $("#app");
-    leavePages();
     const slug = r.view === "parsha" ? r.p.range[0] : r.slug, b = book(slug);
-    setPicker(r);
-    if (!resolved.has(textUrl(slug))) app.innerHTML = `<div class="loading">טוען…</div>`;
+    // the page you're on stays as it is until the new one is drawn, in one go — nothing in between is seen
+    if (!resolved.has(textUrl(slug))) { leavePages(); setPicker(r); app.innerHTML = `<div class="loading">טוען…</div>`; }
     let text;
     try { text = await loadText(slug); }
     catch (e) {
+      leavePages(); setPicker(r);
       app.innerHTML = navigator.onLine === false
         ? `<div class="error-box"><p>${esc(b.he)} · ${esc(b.en)} isn't downloaded, and there's no internet connection.</p><p><a href="#offline">Download sefarim for offline reading</a></p></div>`
         : `<div class="error-box"><p>Couldn't load ${esc(b.en)}.</p><p><a href="">Try again</a></p></div>`;
       return;
     }
     if (current !== r) return;
-    readerState = { r, slug, text, sel: null, open: pendingOpen || new Set(), tab: store.get("tab", "rashi"), haftChoice: pendingHaftChoice || {}, rowsDirty: true };
-    pendingHaftChoice = null; pendingOpen = null;
+    readerState = { r, slug, text, sel: null, open: pendingOpen || new Set(), tab: store.get("tab", "rashi"), haftChoice: pendingHaftChoice || {},
+      haftFull: pendingHaftFull || new Set(), rowsDirty: true };
+    pendingHaftChoice = null; pendingOpen = null; pendingHaftFull = null;
     if (!commMeta(readerState.tab)) readerState.tab = COMMENTARIES[0].id;
     if (r.v && !suppressOpen) readerState.open.add(`${slug}:${r.c}:${r.v}`);
     suppressOpen = false;
     if (r.view === "chapter" && settings.view === "pages") return renderPages(r, text);
     if (r.view === "chapter") return renderSefer(r, text);
+    return renderParsha(r, text);
+  }
+  const haftBooks = (p) => [...new Set(haftRanges(p).map((rg) => rg[0]))];
+  /* what a Scroll page needs before it is drawn — its fonts, and the commentary of the open tab (with the word list
+     for line by line) — so it is drawn once, complete, and nothing that arrives later changes its size */
+  function scrollReady(slugs) {
+    const jobs = [loadCommFor([...new Set(slugs)])];
+    if (!fontsLoaded("scroll")) jobs.push(fontsReady("scroll"));
+    return Promise.all(jobs);
+  }
 
-    // ── parsha view: one parsha across its perakim ──
+  /* ── parsha view: one parsha across its perakim, its haftarah after it ── */
+  async function renderParsha(r, text) {
+    const app = $("#app"), st = readerState, slug = r.p.range[0], b = book(slug);
+    const hb = settings.haftarah && r.p.haft ? haftBooks(r.p) : [];
+    await Promise.all([scrollReady([slug, ...hb]), ...hb.map(loadPlace)]);
+    if (readerState !== st || current !== r) return;
     const segs = segmentsFor(r);
     const sec = INDEX.sections.find((s) => s.id === b.section);
     const pr = r.p.range;
-    document.title = `Parashat ${r.p.en} — Tanach Reader`;
     const nb = neighbors(r);
     let rows = "";
     for (const sg of segs) {
       rows += `<div class="chapter-head"><span>פרק ${gematria(sg.c)}</span><small>${esc(b.en)} ${sg.c}</small></div>`;
       rows += rowsHTML(slug, sg.c, sg.from, sg.to, text, r);
     }
+    leavePages(); setPicker(r);
+    document.title = `Parashat ${r.p.en} — Tanach Reader`;
     app.innerHTML = `
       <div class="reader-wrap">
         <article class="reader">
@@ -1050,44 +1073,46 @@
         </article>
       </div>`;
     renderReaderTools();
-    paintAliyot();
-    const haftJobs = $$(".haftarah", app).map((el) => fillHaftarah(el, el.classList.contains("full")));
+    const verses = $(".verses", app);
+    afterInsert([verses]);                 // aliyah headings, the haftarah and Rashi go in with the text, before it is seen
     preloadHaftarot();
-    $(".verses", app).addEventListener("click", onVerseClick);
+    verses.addEventListener("click", onVerseClick);
+    win.watch(verses);
+    // and the page is put in its place in the same moment
     const target = r.v ? $(`#v-${slug}-${r.c}-${r.v}`) : null;
-    // as in a sefer: in place in the first frame, kept there while Rashi is painted
-    let spot = null;
-    if (!pendingAnchor && !r.haft) { if (target) selectVerse(slug, r.c, r.v, { scroll: true }); else window.scrollTo(0, 0); spot = captureSpot(); }
-    else if (pendingAnchor) { const a = pendingAnchor, row = $(`#v-${a.s}-${a.c}-${a.v}`); if (row) window.scrollTo(0, row.getBoundingClientRect().top + window.scrollY - a.top); }
-    else { const h = $(`#haft-${r.p.id}`); if (h) h.scrollIntoView({ block: "start" }); }
-    await decorateCommentary();
-    preloadForCopy();
     if (pendingAnchor) restoreAnchor();
-    else if (target) { restoreSpot(spot); target.classList.add("flash"); }
-    else if (r.haft) { await Promise.all(haftJobs); const h = $(`#haft-${r.p.id}`); if (h) h.scrollIntoView({ block: "start" }); }
-    else restoreSpot(spot);
+    else if (r.haft) { const h = $(`#haft-${r.p.id}`); if (h) h.scrollIntoView({ block: "start" }); }
+    else if (target) { selectVerse(slug, r.c, r.v, { scroll: true }); target.classList.add("flash"); }
+    else window.scrollTo(0, 0);
+    win.note();
+    showPendingComment();
     trackPosition(true);
+    preloadForCopy();
   }
 
-  /* ── sefer view: the whole sefer as one continuous scroll, with a break between perakim ──
-     Opens at the requested perek, then fills in the rest of the sefer around it in the background
-     (keeping the reader's place steady while perakim are added above). */
-  function perekHTML(slug, c, text, r, drawn) {
+  /* ── sefer view: a sefer as one continuous scroll, with a break between perakim. Only the perakim around where
+     you're reading are on the page, drawn in full (see win, below) ── */
+  function perekHTML(slug, c, text, r) {
     const b = book(slug);
-    // in a whole sefer (Scroll) a perek far from the screen isn't styled or laid out (content-visibility),
-    // and holds its place with the size it had when last drawn, or an estimate until it has been drawn
-    const sk = r && r.view === "chapter" ? ` cv${drawn ? " cv-on" : ""}" style="contain-intrinsic-height:auto ${estPerek(slug, c)}px` : "";
-    return `<section class="perek${sk}" id="perek-${slug}-${c}" data-c="${c}">
+    return `<section class="perek" id="perek-${slug}-${c}" data-c="${c}">
       <div class="chapter-head"><span>פרק ${gematria(c)}</span><small>${esc(b.en)} ${c}</small></div>
       ${rowsHTML(slug, c, 1, b.verses[c - 1], text, r)}
     </section>`;
   }
   async function renderSefer(r, text) {
-    const app = $("#app"), slug = r.slug, b = book(slug), n = b.verses.length;
+    const app = $("#app"), st = readerState, slug = r.slug, b = book(slug), n = b.verses.length;
+    const hp = pendingHaftOpen && INDEX.parshiot.find((x) => x.id === pendingHaftOpen); pendingHaftOpen = null;
+    if (hp && settings.haftarah) st.haftFull.add(hp.id);
+    const a0 = pendingAnchor;
+    // the haftarah being opened (or that you're reading in) is loaded with everything else, before anything is drawn
+    const hb = [...new Set([...(hp && settings.haftarah ? haftBooks(hp) : []), ...(a0 && a0.s !== slug ? [a0.s] : [])])];
+    await Promise.all([scrollReady([slug, ...hb]), ...hb.map(loadPlace)]);
+    if (readerState !== st || current !== r) return;
     const sec = INDEX.sections.find((s) => s.id === b.section);
     const prevB = nbBook(slug, -1), nextB = nbBook(slug, 1);
-    document.title = `${b.en} — Tanach Reader`;
     const total = b.verses.reduce((x, y) => x + y, 0);
+    leavePages(); setPicker(r);
+    document.title = `${b.en} — Tanach Reader`;
     app.innerHTML = `
       <div class="reader-wrap">
         <article class="reader sefer-reader">
@@ -1098,7 +1123,6 @@
             <div class="meta">${n} perakim · ${total} pesukim</div>
             <div class="reader-tools" id="readerTools"></div>
           </header>
-          <div id="sbPad" aria-hidden="true"></div>
           <div class="verses sefer" id="seferBody"></div>
           <nav class="chapter-nav">
             ${prevB ? `<a class="prev" href="${chapterHash(prevB, book(prevB).verses.length)}"><span class="k">← Previous sefer</span><span class="v">${esc(book(prevB).en)} · <span class="he">${esc(book(prevB).he)}</span></span></a>` : `<span class="spacer"></span>`}
@@ -1106,50 +1130,33 @@
           </nav>
         </article>
       </div>`;
-    const st = readerState;
     const body = $("#seferBody");
     body.addEventListener("click", onVerseClick);
     renderReaderTools();
-    const c0 = r.c;
-    st.lo = Math.max(1, c0 - 1); st.hi = Math.min(n, c0 + 1);
-    let html = ""; for (let c = st.lo; c <= st.hi; c++) html += perekHTML(slug, c, text, r, true);
-    body.innerHTML = html;
-    sizer.start(st);
-    const target = r.v ? $(`#v-${slug}-${r.c}-${r.v}`) : null;
-    const place = () => {
-      if (target) { selectVerse(slug, r.c, r.v, { scroll: true }); target.classList.add("flash"); }
-      else if (c0 > 1) $(`#perek-${slug}-${c0}`).scrollIntoView({ block: "start" });
-      else window.scrollTo(0, 0);
-    };
-    // The page is put in its place in the same task its text arrives, before anything that waits — so it is never
-    // seen at the top of the sefer first: the pasuk asked for, or the place being restored (coming back to the
-    // site, switching from Pages), or the haftarah card. The aliyah headings go in first; Rashi is painted after,
-    // and that place is kept while it is (when Rashi is in memory that's the same task, so nothing is seen moving).
-    afterInsert($$(".perek", body), false);
-    const early = !pendingAnchor && !pendingHaftOpen;
-    let spot = null;
-    if (early) { place(); spot = captureSpot(); }
-    else {
-      const a = pendingAnchor, row = a && $(`#v-${a.s}-${a.c}-${a.v}`), card = pendingHaftOpen && $(`#haft-${pendingHaftOpen}`);
-      if (row) window.scrollTo(0, row.getBoundingClientRect().top + window.scrollY - a.top);
-      else if (card) card.scrollIntoView({ block: "start" });
-      else if (a && a.c) { const pk = $(`#perek-${slug}-${a.c}`); if (pk) pk.scrollIntoView({ block: "start" }); }
-    }
-    await decorateCommentary();            // loads Rashi once for the sefer, paints these perakim
-    if (readerState !== st) return;
-    if (pendingHaftOpen) {
-      const el = $(`#haft-${pendingHaftOpen}`); pendingHaftOpen = null;
-      if (el) { el.classList.add("full"); el.classList.remove("card"); await fillHaftarah(el, true); if (readerState !== st) return; st.rowsDirty = true; }
-    }
-    preloadForCopy();
-    if (pendingAnchor) restoreAnchor();
-    else if (early) restoreSpot(spot);
-    else place();
+    const a = pendingAnchor; pendingAnchor = null;
+    const c0 = a && a.s === slug && a.c >= 1 && a.c <= n ? a.c : Math.min(Math.max(1, r.c || 1), n);
+    st.win = true;
+    win.rebuildAt(c0);
+    win.watch(body);
+    // What will be on the screen is drawn (with what's below it), the page is put in its place, then the perakim
+    // above are added with the page kept exactly where it is — all in this one moment, before the screen is drawn,
+    // so the sefer is first seen where it belongs, complete: the pasuk asked for, the place being kept (coming back
+    // to the site, switching from Pages, a setting), or the haftarah being opened
+    const row = a && $(`#v-${a.s}-${a.c}-${a.v}`), card = !row && hp && $(`#haft-${hp.id}`);
+    const target = !row && !card && r.v ? $(`#v-${slug}-${r.c}-${r.v}`) : null;
+    const el = row || card || target || $(`#perek-${slug}-${c0}`);
+    win.below(el.getBoundingClientRect().top);
+    if (row) window.scrollTo(0, row.getBoundingClientRect().top + window.scrollY - a.top);
+    else if (card) card.scrollIntoView({ block: "start" });
+    else if (target) { selectVerse(slug, r.c, r.v, { scroll: true }); target.classList.add("flash"); }
+    else if (c0 > 1) el.scrollIntoView({ block: "start" });
+    else window.scrollTo(0, 0);
+    win.above();
+    if (restoreSel) { const q = restoreSel; restoreSel = null; markSelected(q.s, q.c, q.v); }
+    win.note();
     showPendingComment();
-    sizer.rebase();
-    sizer.release($$(".perek.cv-on", body));
     trackPosition(true);
-    fillSefer(st, c0);
+    preloadForCopy();
     preloadPagesData(slug);
   }
   /* while reading in Scroll, quietly fetch what Pages needs for this sefer, so switching never waits:
@@ -1189,16 +1196,16 @@
     if (k === warmKey) return;
     idle(() => { if (warmPasuk(row.dataset.s, +row.dataset.c, +row.dataset.v)) warmKey = k; }, 3000);   // remembered only once done
   }
-  function afterInsert(sections, paintRashi = true) {
+  /* a part just added to the page (a perek, or a parsha's pesukim) gets its aliyah headings, its haftarah and its
+     Rashi in the same moment, so it goes in at its full size and never changes size after */
+  function afterInsert(sections) {
     const st = readerState; if (!st) return;
     st.rowsDirty = true;
     for (const sec of sections) {
       paintAliyot(sec);
       $$(".haftarah", sec).forEach((el) => fillHaftarah(el, el.classList.contains("full")));
-      if (paintRashi) {
-        const rows = $$(".verse", sec);
-        if (st.comm && st.comm[st.slug]) rows.forEach(paintRow); else decorateCommentary(rows);
-      }
+      paintRows($$(":scope > .verse", sec));
+      if (st.sel) { const row = $(`#v-${st.sel.s}-${st.sel.c}-${st.sel.v}`, sec); if (row) row.classList.add("selected"); }
     }
   }
   let lastScrollAt = 0, touching = false;
@@ -1206,302 +1213,179 @@
   window.addEventListener("scroll", () => { if (Date.now() - selfScrollAt > 120) lastScrollAt = Date.now(); }, { passive: true });
   window.addEventListener("touchstart", () => { touching = true; }, { passive: true });
   window.addEventListener("touchend", () => { touching = false; lastScrollAt = Date.now(); }, { passive: true });
-  /* add a batch of perakim (≈80 pesukim at a time) after or before what's shown */
-  function addPerakim(st, where) {
-    const body = $("#seferBody"); if (!body) return;
-    const b = book(st.slug), n = b.verses.length;
-    let html = "", count = 0, added = 0;
-    if (where === "after") {
-      while (st.hi < n && (added === 0 || count < 160)) { st.hi++; html += perekHTML(st.slug, st.hi, st.text, st.r); count += b.verses[st.hi - 1]; added++; }
-      const tpl = document.createElement("template"); tpl.innerHTML = html;
-      const secs = [...tpl.content.children]; body.append(tpl.content); afterInsert(secs);
-      sizer.observe(secs);
-      return;
+
+  /* ── Scroll: keeping your place ──
+     A sefer is not put on the page whole. Only the perakim around where you're reading are there — a few screens
+     above and below — and they are drawn in full: no part of the page is skipped by the browser or held at a
+     guessed size, so nothing on it ever changes size by itself.
+       • As you read on, the next perakim are added below (that never moves what you see).
+       • When you're near the top of what's there and not scrolling, the perakim before are added above, and the
+         page is moved by exactly their height in the same moment — before the screen is drawn again.
+       • Perakim far from you are let go in quiet moments (the page stays light; the same way, in reverse).
+       • Anything else that changes size above you — a setting, Rashi opened or closed, a font arriving, the
+         iPad turned — is put right in the same moment too (keep), or, if it came by itself, before the frame it
+         happened in is drawn (a ResizeObserver: hold).
+     The browser's own scroll anchoring is off (overflow-anchor: none in styles.css): one thing keeps your place, so
+     it is never done twice, and the first frame drawn after any change is the final one. */
+  const win = (() => {
+    const AHEAD = 3.5, BEHIND = 3.5, FAR = 10, KEEP = 5;     // screens
+    const sefer = () => { const st = readerState; return st && st.win && !PG ? $("#seferBody") : null; };
+    /* the anchor: the pasuk at the reading line — or, if you're reading in its Rashi, the comment there */
+    function anchorAt() {
+      if (!readerState || PG || !$(".reader")) return null;
+      const row = topRow(); if (!row) return null;
+      const L = topLine() + 6;
+      let el = row;
+      const dd = row.querySelector(".rdrop"), he = row.querySelector(".v-he"), en = row.querySelector(".v-en");
+      const textEnd = Math.max(he ? he.getBoundingClientRect().bottom : 0, en ? en.getBoundingClientRect().bottom : 0);
+      if (dd && textEnd < L) { for (const rr of dd.querySelectorAll(".rrow")) if (rr.getBoundingClientRect().bottom > L) { el = rr; break; } }
+      return { el, row, top: el.getBoundingClientRect().top, rowTop: row.getBoundingClientRect().top, ri: el === row ? null : el.dataset.i };
     }
-    const cs = [];
-    while (st.lo > 1 && (cs.length === 0 || count < (sizer.native ? 160 : 40))) { st.lo--; cs.unshift(st.lo); count += b.verses[st.lo - 1]; }
-    for (const c of cs) html += perekHTML(st.slug, c, st.text, st.r, !sizer.native);
-    // before: keep whatever the reader is looking at exactly where it is. They are drawn as they go in, so
-    // their sizes are real at once (one correction, none later), then left to the browser to skip
-    const tpl = document.createElement("template"); tpl.innerHTML = html;
-    const secs = [...tpl.content.children];
-    sizer.keep(() => { body.prepend(tpl.content); afterInsert(secs); });
-    sizer.observe(secs);
-    if (!sizer.native) { sizer.mark(secs); sizer.release(secs); }
-  }
-  /* ── Sizes in a whole sefer (Scroll) ──
-     A perek far from the screen is skipped by the browser (content-visibility: auto): not styled or laid out,
-     so changing a setting costs only what's on the screen, not a sefer of 1,500 pesukim. A skipped perek
-     holds its place with a size: what it measured when last drawn, or an estimate until it has been drawn.
-     Safari doesn't keep your place when something above it changes size (no scroll anchoring), so:
-       • a perek above where you're reading whose size isn't known for the current layout is drawn here —
-         the nearest first, in quiet moments when you aren't scrolling — and the page kept in place;
-       • if the browser draws one first (you scrolled up to it), the change is made up for before that frame
-         is painted (ResizeObserver);
-       • every correction is a whole number of pixels, with a pad above the perakim taking the fraction, so
-         the text on the screen never moves by part of a pixel (which shows as a shimmer). */
-  const sizer = (() => {
-    /* Where the browser keeps your place itself (scroll anchoring: Safari 27 and later, Chrome, Firefox), it is left
-       to do so — it adjusts the page inside its own layout, in the same frame, even during a fling; doing it from
-       the page as well moved the text twice, and on iPad the page's own corrections showed as flicker. The page's
-       own keeping of the place (below) is only for browsers without it (older Safari). */
-    const native = !!(window.CSS && CSS.supports && CSS.supports("overflow-anchor", "auto")) && store.get("anchorMode", "") !== "manual";
-    let st = null, ro = null, gen = 1, pad = 0, timer = 0, perVerse = 0;
-    const body = () => (st && readerState === st ? $("#seferBody") : null);
-    const line = () => $(".topbar").getBoundingClientRect().bottom + ($("#copybar").hidden ? 0 : $("#copybar").offsetHeight) + 8;
-    const drawn = (P) => P.classList.contains("cv-on") ||
-      !!(P.firstElementChild && P.firstElementChild.checkVisibility && P.firstElementChild.checkVisibility({ contentVisibilityAuto: true }));
-    function learn(P, h) {
-      const n = st && book(st.slug).verses[+P.dataset.c - 1]; if (!n || n < 3) return;
-      const pv = Math.max(20, (h - 70) / n); perVerse = perVerse ? perVerse * .75 + pv * .25 : pv;
+    function scrollFix(d) { if (!(Math.abs(d) >= .5)) return; selfScrollAt = Date.now(); window.scrollTo(0, window.scrollY + d); }
+    /* put the page back so the anchor is where it was on the screen */
+    function restore(a, pasuk) {
+      if (a) {
+        let el = a.el.isConnected ? a.el : null, top = a.top;
+        if (!el && a.ri != null && a.row.isConnected) { el = a.row.querySelector(`.rrow[data-i="${a.ri}"]`); }
+        if (el) scrollFix(el.getBoundingClientRect().top - top);
+        else if (a.row.isConnected) scrollFix(a.row.getBoundingClientRect().top - a.rowTop);
+        // the pasuk you were on gone up above the screen (its Rashi, which you were in, closed): back to the top
+        if (pasuk && a.row.isConnected && (!el || el === a.row)) {
+          const he = a.row.querySelector(".v-he"), L = topLine();
+          if (he && he.getBoundingClientRect().bottom < L + 4) scrollFix(a.row.getBoundingClientRect().top - (L + 2));
+        }
+      }
+      if (readerState) readerState.rowsDirty = true;
+      note();
     }
-    function guess() {
-      if (perVerse) return perVerse;
-      const base = { side: 64, stack: 118, he: 58, en: 52 }[settings.mode] || 70;
-      return settings.rashiOpen ? base * 3.2 : base;
-    }
-    /* the content above what you're reading grew by d px: scroll by a whole number of pixels, the pad takes the rest */
-    function absorb(d) {
-      if (native || !(Math.abs(d) >= .01)) return;
-      const s = Math.ceil(d - pad - 1e-4);
-      pad = Math.min(.999, Math.max(0, pad + s - d));
-      const el = $("#sbPad"); if (el) el.style.height = pad.toFixed(3) + "px";
-      if (s) { selfScrollAt = Date.now(); window.scrollBy(0, s); }
-    }
-    /* run something that changes sizes above where you're reading, keeping your place */
-    function keep(fn) {
-      if (native) { fn(); return; }
-      if (!anc || !anc.row.isConnected) noteAnchor();
-      const row = anc ? anc.row : topRow(), t0 = anc ? anc.doc - window.scrollY : row ? row.getBoundingClientRect().top : 0;
-      fn();
-      if (row && row.isConnected) absorb(row.getBoundingClientRect().top - t0);
-      rebase(); arm();
-    }
-    /* after the page was put where it should be (by us, or by you scrolling): where the pasuk you're reading is now
-       is where it stays. Perakim that are drawn have sizes known for this layout. (Skipped perakim aren't measured:
-       in Safari, measuring one just after a setting changed makes it lay the whole perek out.) */
-    function rebase() {
-      const b = body(); if (!b || native) return;
-      for (const P of b.children) if (drawn(P)) P._k = gen;
-      noteAnchor();
-      soon(400);                          // a jump or a change can leave perakim above whose size isn't known
-    }
-    /* THE ANCHOR — the pasuk at the reading line and where it is on the screen. Whatever changes size above it
-       (a perek the browser draws for the first time, a font arriving, Rashi painted in, an aliyah heading), the page
-       is put back so that pasuk is where it was, until you scroll. Checked when the browser reports a size change
-       (before it paints), and on each frame for a while after anything happens (Safari reports some changes a frame
-       late). */
+    /* change something above you, keeping your place: done and put right in the same moment */
+    function keep(fn, pasuk) { const a = anchorAt(); fn(); restore(a, pasuk); }
+    /* where the anchor is in the page — so a change of size that comes by itself can be made up for */
     let anc = null;
-    function noteAnchor() {
-      anc = null;
-      const b = body(); if (!b || native) return;
-      // only perakim that are drawn are measured (a skipped one can cost Safari a whole layout of it)
-      const L = line() + 14;
-      let P = null;
-      for (const Q of b.children) {
-        if (!drawn(Q)) continue;
-        const r = Q.getBoundingClientRect();
-        if (r.bottom > L) { if (r.top <= L) P = Q; break; }
-      }
-      if (!P) {          // just jumped somewhere the browser hasn't drawn yet
-        const row = topRow(); if (row && row.closest(".perek")) anc = { row, P: row.closest(".perek"), doc: row.getBoundingClientRect().top + window.scrollY };
-        return;
-      }
-      const rs = P.querySelectorAll(".verse");
-      let a = 0, z = rs.length - 1, k = -1;
-      while (a <= z) { const m = (a + z) >> 1; if (rs[m].getBoundingClientRect().bottom > L) { k = m; z = m - 1; } else a = m + 1; }
-      if (k < 0) return;
-      anc = { row: rs[k], P, doc: rs[k].getBoundingClientRect().top + window.scrollY };
-      // what's in this perek is watched too: a pasuk above yours can change height without the perek doing so
-      if (ro && watched !== P) {
-        if (watched) for (const c of watched.children) ro.unobserve(c);
-        watched = P; for (const c of P.children) ro.observe(c);
-      }
-    }
-    let watched = null;
-    function observe(list) { if (ro && body()) for (const P of list) if (P.classList.contains("cv")) ro.observe(P); }
-    /* a perek drawn for measuring is handed back to the browser to skip — but only once the browser has recorded
-       its size as drawn now (it does that when it reports sizes, P._ro). Handed back earlier, Safari would skip it
-       at a size it had before (say, before a setting changed), and the page would move without any report of it. */
-    const pending = new Set(); let relRaf = 0;
-    function release(list) {
-      if (!list.length) return;
-      if (!ro) { frames(3).then(() => list.forEach((P) => P.classList.remove("cv-on"))); return; }
-      list.forEach((P) => pending.add(P));
-      if (!relRaf) relRaf = requestAnimationFrame(tryRelease);
-    }
-    function tryRelease() {
-      relRaf = 0;
-      for (const P of [...pending]) {
-        if (!P.isConnected || !P.classList.contains("cv-on")) { pending.delete(P); continue; }
-        if (P._ro != null && Math.abs(P._ro - P.getBoundingClientRect().height) < .01) { P.classList.remove("cv-on"); pending.delete(P); }
-      }
-      if (pending.size) relRaf = requestAnimationFrame(tryRelease);
-    }
-    function onResize(entries) {
-      const b = body(); if (!b) return;
-      for (const e of entries) {
-        const P = e.target; if (P.parentElement !== b) continue;
-        P._ro = e.borderBoxSize && e.borderBoxSize[0] ? e.borderBoxSize[0].blockSize : P.getBoundingClientRect().height;
-        if (drawn(P)) { P._k = gen; learn(P, P._ro); }
-      }
-      if (!native) { hold(); arm(); }
-    }
-    /* the pasuk you're reading has moved in the page (not the page scrolled — that's you): put it back. Measured
-       in the page's own coordinates, so a scroll of yours in the same moment is never undone */
+    function note() { const a = anchorAt(); anc = a ? { el: a.el, doc: a.top + window.scrollY } : null; }
     function hold() {
-      if (!anc) return;
-      if (!anc.row.isConnected || !body()) { anc = null; return; }
-      const d = anc.row.getBoundingClientRect().top + window.scrollY - anc.doc;
-      if (Math.abs(d) >= .01) { absorb(d); anc.doc = anc.row.getBoundingClientRect().top + window.scrollY; }
+      if (!anc || !anc.el.isConnected || PG) { note(); return; }
+      const doc = anc.el.getBoundingClientRect().top + window.scrollY, d = doc - anc.doc;
+      anc.doc = doc;
+      scrollFix(d);
     }
-    // and, in quiet times, a look four times a second (a change can come with no event: Safari lays out a font that
-    // has arrived when it gets to it)
-    setInterval(() => { if (!native && !armed && anc && !document.hidden && body() && anc.row.isConnected &&
-      Math.abs(anc.row.getBoundingClientRect().top + window.scrollY - anc.doc) >= .01) { hold(); arm(); } }, 250);
-    let armed = 0, calm = 0;
-    function arm() { calm = 0; if (!armed && !native && body()) armed = requestAnimationFrame(tick); }
-    function tick() {
-      armed = 0;
-      if (!body()) return;
-      const before = anc && anc.row.isConnected ? anc.row.getBoundingClientRect().top + window.scrollY - anc.doc : 0;
-      if (Math.abs(before) >= .01) { hold(); calm = 0; } else calm++;
-      if (calm < 90) armed = requestAnimationFrame(tick);          // about 1½ seconds of nothing moving
+    const ro = window.ResizeObserver ? new ResizeObserver(() => hold()) : null;
+    let watched = null;
+    function watch(el) { if (!ro) return; if (watched) ro.unobserve(watched); watched = el; ro.observe(el); }
+    if (document.fonts && document.fonts.addEventListener) document.fonts.addEventListener("loadingdone", () => hold());
+
+    /* perakim in and out */
+    function ins(b, where, c) {
+      const st = readerState, tpl = document.createElement("template");
+      tpl.innerHTML = perekHTML(st.slug, c, st.text, st.r);
+      const secs = [...tpl.content.children];
+      if (where === "after") b.append(tpl.content); else b.prepend(tpl.content);
+      afterInsert(secs);
     }
-    /* draw the nearest perakim above the reading line whose size isn't known for this layout — a few at a
-       time (as many as take about 30 ms), so the page is put back in place as few times as possible */
-    let batch = 2;
-    function step() {
-      timer = 0;
-      const b = body(); if (!b || native) return;
-      if (touching || Date.now() - lastScrollAt < 300 || layoutSwitch || document.hidden) { soon(400); return; }
-      const ps = b.children, L = line();
-      let lo = 0, hi = ps.length - 1, i = ps.length;
-      while (lo <= hi) { const m = (lo + hi) >> 1; if (ps[m].getBoundingClientRect().bottom > L) { i = m; hi = m - 1; } else lo = m + 1; }
-      const list = [];
-      for (let j = i - 1; j >= 0 && list.length < batch; j--) {
-        const P = ps[j]; if (P._k === gen) continue;
-        if (drawn(P)) { P._k = gen; continue; }
-        list.push(P);
+    function rebuildAt(c) {
+      const b = sefer(), st = readerState; if (!b) return;
+      st.lo = st.hi = c; b.textContent = ""; ins(b, "after", c);
+    }
+    /* below: enough to read on for a few screens from `from` (a point on the screen; by default its top) */
+    function below(from = 0) {
+      const b = sefer(), st = readerState; if (!b) return;
+      const n = book(st.slug).verses.length, want = from + (AHEAD + 1) * innerHeight;
+      let k = 0;
+      while (st.hi < n && k++ < 16 && b.getBoundingClientRect().bottom < want) { st.hi++; ins(b, "after", st.hi); }
+    }
+    /* above: a few screens to scroll back into, added with the page kept where it is */
+    function above() {
+      const b = sefer(), st = readerState; if (!b || st.lo <= 1) return;
+      const have = topLine() - b.getBoundingClientRect().top, H = innerHeight;
+      if (have >= BEHIND * H) return;
+      keep(() => {
+        const h0 = b.offsetHeight; let k = 0;
+        while (st.lo > 1 && k++ < 16 && have + (b.offsetHeight - h0) < BEHIND * H) { st.lo--; ins(b, "before", st.lo); }
+      });
+    }
+    /* far away: let go (below freely; above with the page kept where it is) */
+    function trim() {
+      const b = sefer(), st = readerState; if (!b) return;
+      const H = innerHeight;
+      let extra = b.getBoundingClientRect().bottom - H;
+      if (extra > FAR * H) {
+        while (b.children.length > 2) {
+          const P = b.lastElementChild, h = P.getBoundingClientRect().height;
+          if (extra - h < KEEP * H) break;
+          P.remove(); st.hi--; extra -= h; st.rowsDirty = true;
+        }
       }
-      if (!list.length) { unsettled = false; return; }       // every perek above has its size for this layout
-      const t0 = performance.now();
-      keep(() => { list.forEach((P) => P.classList.add("cv-on")); void b.offsetHeight; });
-      const ms = performance.now() - t0;
-      // about 50 ms of work a time: each batch is one correction of the page (and one repaint of the screen)
-      batch = ms < 30 ? Math.min(batch + 1, 12) : ms > 70 ? Math.max(1, batch - 1) : batch;
-      list.forEach((P) => { P._k = gen; }); release(list);
-      soon(i - list.length > 3 ? 200 : 60);     // the nearest few soon, those further up at an easier pace
+      const have = topLine() - b.getBoundingClientRect().top;
+      if (have > FAR * H) keep(() => {
+        let left = have;
+        while (b.children.length > 2) {
+          const P = b.firstElementChild, h = P.getBoundingClientRect().height;
+          if (left - h < KEEP * H) break;
+          P.remove(); st.lo++; left -= h;
+        }
+      });
     }
-    function soon(ms = 250) { if (!timer && !native && body()) { unsettled = true; timer = setTimeout(() => idle(step, 1200), ms); } }
-    /* the perakim just above the screen whose size isn't known for this layout, drawn now — from a scroll event,
-       that's before the browser draws this frame: scrolling up into them (Safari draws a skipped perek only as it
-       reaches the screen, and reports its new size a frame later) never shows the page jumping */
-    let unsettled = false;
-    function near(reach) {
-      const b = body(); if (!b || !unsettled || native) return;
-      const ps = b.children, L = line();
-      let lo = 0, hi = ps.length - 1, i = ps.length;
-      while (lo <= hi) { const m = (lo + hi) >> 1; if (ps[m].getBoundingClientRect().bottom > L) { i = m; hi = m - 1; } else lo = m + 1; }
-      const list = [];
-      for (let j = i - 1; j >= 0 && list.length < 4; j--) {
-        const P = ps[j];
-        if (P.getBoundingClientRect().bottom < L - reach) break;
-        if (P._k === gen) continue;
-        if (drawn(P)) { P._k = gen; continue; }
-        list.push(P);
-      }
-      if (!list.length) return;
-      keep(() => { list.forEach((P) => P.classList.add("cv-on")); void b.offsetHeight; });
-      list.forEach((P) => { P._k = gen; }); release(list);
+    /* a perek that may be far from here: the window is made around it if it isn't on the page; returns el() */
+    function bring(c, el) {
+      const st = readerState; if (!sefer()) return null;
+      if (c < st.lo || c > st.hi) rebuildAt(c);
+      const e = el(); if (e) below(e.getBoundingClientRect().top);
+      return e;
+    }
+    /* quiet moments: the perakim above are added, far ones let go */
+    let settleT = 0;
+    function settle() {
+      clearTimeout(settleT);
+      settleT = setTimeout(() => {
+        if (!sefer()) return;
+        if (touching || Date.now() - lastScrollAt < 200) { settle(); return; }
+        idle(() => {
+          if (!sefer()) return;
+          if (touching || Date.now() - lastScrollAt < 200) { settle(); return; }
+          below(); above(); trim();
+        }, 400);
+      }, 220);
     }
     window.addEventListener("scroll", () => {
-      if (native || !body()) return;
-      if (unsettled && Date.now() - selfScrollAt > 50) near(innerHeight * 1.5);
-      noteAnchor(); arm();
+      const b = sefer();
+      if (b) {
+        const r = b.getBoundingClientRect();
+        if (r.bottom < innerHeight * 1.6) below();                                   // nearly at the end of what's here
+        if (!touching && readerState.lo > 1 && topLine() - r.top < innerHeight * .6) above();   // nearly at its top
+        settle();
+      }
+      note();
     }, { passive: true });
-    /* a web font arriving changes the size of text everywhere: what's drawn is kept in place as it happens (above),
-       and the perakim skipped meanwhile are measured again before they're reached */
-    if (document.fonts && document.fonts.addEventListener) {
-      document.fonts.addEventListener("loading", () => { if (body() && !native) arm(); });
-      document.fonts.addEventListener("loadingdone", () => { if (body() && !native) { gen++; soon(300); arm(); } });
-    }
-    return {
-      start(s) {
-        st = s; pad = 0; perVerse = 0; clearTimeout(timer); timer = 0;
-        if (ro) ro.disconnect();
-        ro = window.ResizeObserver ? new ResizeObserver(onResize) : null; watched = null; anc = null;
-        cancelAnimationFrame(armed); armed = 0;
-        observe($$("#seferBody > .perek"));
-      },
-      /* a setting changed the layout: sizes of perakim not on the screen are no longer known */
-      native,
-      changed() { if (!body() || native) return; gen++; perVerse = 0; rebase(); unsettled = true; near(innerHeight); soon(150); },
-      /* perakim between two points are drawn now, so a scroll from one to the other lands where it should */
-      drawBetween(a, b) {
-        const B = body(); if (!B || !a || !b) return;
-        const pa = a.closest(".perek"), pb = b.closest(".perek"); if (!pa || !pb || pa === pb) return;
-        const ps = [...B.children], i = ps.indexOf(pa), j = ps.indexOf(pb);
-        const list = ps.slice(Math.min(i, j), Math.max(i, j) + 1).filter((P) => !drawn(P));
-        if (!list.length) return;
-        keep(() => { list.forEach((P) => P.classList.add("cv-on")); void B.offsetHeight; });
-        list.forEach((P) => (P._k = gen)); release(list);
-      },
-      mark(list) { list.forEach((P) => (P._k = gen)); },
-      /* a perek's content changed while it was skipped: its size is no longer known */
-      dirty(P) { P._k = 0; },
-      keep, rebase, observe, release, soon,
-      est: (slug, c) => Math.round(70 + book(slug).verses[c - 1] * guess()),
-    };
+    window.addEventListener("touchend", () => { if (sefer()) settle(); }, { passive: true });
+    return { sefer, anchorAt, restore, keep, note, hold, watch, rebuildAt, below, above, trim, bring };
   })();
-  const estPerek = (slug, c) => sizer.est(slug, c);
-  function addPerek(st, c, where) { addPerakim(st, where); }
-  function fillSefer(st, c0) {
-    const n = book(st.slug).verses.length;
-    const step = () => {
-      if (readerState !== st) return;
-      const canPrepend = st.lo > 1 && !touching && Date.now() - lastScrollAt > 250;
-      const wantAfter = st.hi < n && (st.lo <= 1 || st.hi - c0 <= c0 - st.lo || !canPrepend);
-      if (wantAfter) addPerakim(st, "after");
-      else if (canPrepend) addPerakim(st, "before");
-      else if (st.lo <= 1 && st.hi >= n) return;     // whole sefer is in
-      later(step);
-    };
-    const later = (f) => window.requestIdleCallback ? requestIdleCallback(f, { timeout: 250 }) : setTimeout(f, 20);
-    (layoutSwitch || Promise.resolve()).then(() => setTimeout(() => later(step), layoutSwitch ? 900 : 60));
-  }
-  /* render every perek between what's shown and c (used when jumping within the sefer) */
-  function ensurePerek(c) {
-    const st = readerState; if (!st || st.r.view !== "chapter") return;
-    while (st.hi < c) addPerek(st, st.hi + 1, "after");
-    while (st.lo > c) {
-      const body = $("#seferBody"); body.insertAdjacentHTML("afterbegin", perekHTML(st.slug, st.lo - 1, st.text, st.r));
-      st.lo--; afterInsert([body.firstElementChild]); sizer.observe([body.firstElementChild]);
-    }
-  }
+  /* opening a pasuk or a perek in the sefer you're reading */
   function jumpWithinSefer(c, v) {
-    const st = readerState; ensurePerek(c);
+    const st = readerState;
+    const el = win.bring(c, () => (v ? $(`#v-${st.slug}-${c}-${v}`) : $(`#perek-${st.slug}-${c}`)));
+    if (!el) return;
     if (v) {
-      const row = $(`#v-${st.slug}-${c}-${v}`); if (!row) return;
-      st.open.add(`${st.slug}:${c}:${v}`); paintRow(row);
+      st.open.add(`${st.slug}:${c}:${v}`); paintRow(el);
       selectVerse(st.slug, c, v, { scroll: true });
-      row.classList.remove("flash"); void row.offsetWidth; row.classList.add("flash");
+      el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");
     } else {
-      const el = $(`#perek-${st.slug}-${c}`); if (el) el.scrollIntoView({ block: "start" });
-      sizer.rebase();
+      el.scrollIntoView({ block: "start" });
       history.replaceState(null, "", chapterHash(st.slug, c));
     }
+    win.above(); win.note();
     trackPosition(true);
   }
 
-  /* where the reader is: the first pasuk under the top bar (binary search — the sefer can have thousands) */
+  /* the reading line: just below the top bar (and the copy bar) */
+  function topLine() { return $(".topbar").getBoundingClientRect().bottom + ($("#copybar").hidden ? 0 : $("#copybar").offsetHeight) + 8; }
+  /* where the reader is: the first pasuk under the top bar (binary search) */
   function topRow() {
     const st = readerState; if (!st) return null;
     if (!st.rows || st.rowsDirty) { st.rows = $$(".reader .verse"); st.rowsDirty = false; }
     const rows = st.rows; if (!rows.length) return null;
-    const top = $(".topbar").getBoundingClientRect().bottom + ($("#copybar").hidden ? 0 : $("#copybar").offsetHeight) + 8;
+    const top = topLine();
     const sb = st.r.view === "chapter" && $("#seferBody");
-    if (sb && sb.firstElementChild && sb.firstElementChild.classList.contains("cv")) {
+    if (sb && sb.children.length > 1) {
       // a whole sefer: find the perek at the line first, then the pasuk in it
       const ps = sb.children;
       let lo = 0, hi = ps.length - 1, k = ps.length - 1;
@@ -1543,12 +1427,12 @@
     }
   }
   /* after a re-render (settings change), put the same pasuk back at the same height on screen */
-  let pendingAnchor = null, pendingOpen = null, pendingHaftOpen = null, restoreSel = null;
+  let pendingAnchor = null, pendingOpen = null, pendingHaftOpen = null, pendingHaftFull = null, restoreSel = null;
   function restoreAnchor() {
     const a = pendingAnchor; pendingAnchor = null;
     const row = a && $(`#v-${a.s}-${a.c}-${a.v}`);
     if (row) window.scrollTo(0, row.getBoundingClientRect().top + window.scrollY - a.top);
-    sizer.rebase();
+    win.note();
     if (restoreSel) { const r = restoreSel; restoreSel = null; markSelected(r.s, r.c, r.v); }
   }
   let suppressOpen = false;
@@ -1596,8 +1480,8 @@
     ps.forEach((p) => preloadParshaHaftarot(p, done));
   }
 
-  async function fillHaftarah(el, expanded) {
-    const p = INDEX.parshiot.find((x) => x.id === el.dataset.p); if (!p) return;
+  function fillHaftarah(el, expanded) {
+    const p = INDEX.parshiot.find((x) => x.id === el.dataset.p); if (!p) return Promise.resolve();
     const opts = haftOptions(p), choice = haftChoice(p), opt = opts.find((o) => o.id === choice) || opts[0];
     const ranges = haftRanges(p);
     const sefard = settings.haftCustom === "s" && opt.s;
@@ -1618,38 +1502,43 @@
     if (!expanded) {
       el.innerHTML = head + `<button type="button" class="haft-open">Show the haftarah here</button>`;
       wire();
-      $(".haft-open", el).addEventListener("click", () => { el.classList.add("full"); el.classList.remove("card"); fillHaftarah(el, true); });
-      return;
+      $(".haft-open", el).addEventListener("click", () => {
+        if (readerState) readerState.haftFull.add(p.id);
+        el.classList.add("full"); el.classList.remove("card"); fillHaftarah(el, true);
+      });
+      return Promise.resolve();
     }
-    // wait until the text, Rashi and its translation are all loaded, then show everything at once
     const books = [...new Set(ranges.map((rg) => rg[0]))];
-    const ready = books.every(copyReady);
-    if (!ready) { el.innerHTML = head + `<div class="loading" style="padding:20px 0;font-size:1rem">טוען…</div>`; wire(); }
-    await Promise.all(books.map(loadPlace));
-    if (!el.isConnected) return;
-    const texts = {};
-    for (const s of books) texts[s] = resolved.get(textUrl(s));
-    if (books.some((s) => !texts[s])) { el.innerHTML = head + `<p class="empty">Couldn't load the haftarah.</p>`; wire(); return; }
-    let rows = "";
-    ranges.forEach((rg, k) => {
-      const [s, c1, v1, c2, v2] = rg;
-      if (k > 0) rows += `<div class="haft-gap"><span>${esc(rangeEn(rg))}</span><span class="he">${esc(rangeHe(rg))}</span></div>`;
-      for (let c = c1; c <= c2; c++) {
-        const from = c === c1 ? v1 : 1, to = c === c2 ? v2 : book(s).verses[c - 1];
-        for (let v = from; v <= to; v++) rows += verseRow(s, c, v, texts[s]);
-      }
-    });
-    el.innerHTML = head + `<div class="verses haft-verses">${rows}</div>`;
-    wire();
-    // clicks bubble up to the reader's .verses listener
-    await decorateCommentary($$(".verse", el));
+    const draw = () => {
+      const texts = {};
+      for (const s of books) texts[s] = resolved.get(textUrl(s));
+      if (books.some((s) => !texts[s])) { el.innerHTML = head + `<p class="empty">Couldn't load the haftarah.</p>`; wire(); return; }
+      let rows = "";
+      ranges.forEach((rg, k) => {
+        const [s, c1, v1, c2, v2] = rg;
+        if (k > 0) rows += `<div class="haft-gap"><span>${esc(rangeEn(rg))}</span><span class="he">${esc(rangeHe(rg))}</span></div>`;
+        for (let c = c1; c <= c2; c++) {
+          const from = c === c1 ? v1 : 1, to = c === c2 ? v2 : book(s).verses[c - 1];
+          for (let v = from; v <= to; v++) rows += verseRow(s, c, v, texts[s]);
+        }
+      });
+      el.innerHTML = head + `<div class="verses haft-verses">${rows}</div>`;
+      wire();
+      paintRows($$(".verse", el));          // clicks bubble up to the reader's .verses listener
+      if (readerState) readerState.rowsDirty = true;
+    };
+    // with its text and Rashi in memory it is drawn in the same moment; otherwise when they're loaded, all at once
+    if (books.every((s) => resolved.has(textUrl(s))) && commSync(books)) { draw(); return Promise.resolve(); }
+    el.innerHTML = head + `<div class="loading" style="padding:20px 0;font-size:1rem">טוען…</div>`; wire();
+    const st = readerState;
+    return Promise.all(books.map(loadPlace)).then(() => loadCommFor(books)).then(() => { if (el.isConnected && readerState === st) win.keep(draw); });
   }
   function rerenderKeepingPlace() {
     if (!readerState || !current) return Promise.resolve();
     const st = readerState, pos = st.lastPos;
     const row = pos && $(`#v-${pos.s}-${pos.c}-${pos.v}`);
     pendingAnchor = row ? { s: pos.s, c: pos.c, v: pos.v, top: row.getBoundingClientRect().top } : null;
-    pendingHaftChoice = st.haftChoice; pendingOpen = new Set(st.open);
+    pendingHaftChoice = st.haftChoice; pendingOpen = new Set(st.open); pendingHaftFull = new Set(st.haftFull || []);
     if (PG && pos) {
       pendingAnchor = null;
       const it = PG.items[PG.idx];
@@ -1743,10 +1632,15 @@
       closeAllDialogs();
       if (PG) { const i = PG.items.findIndex((it) => it.type === "haft" && it.pid === b.dataset.haft); if (i >= 0) { pagerShow(i, 0); return; } }
       const el = $(`#haft-${b.dataset.haft}`);
-      if (el) { sizer.drawBetween(topRow(), el); el.scrollIntoView({ block: "start", behavior: "smooth" }); return; }
+      if (el) { el.scrollIntoView({ block: "start", behavior: "smooth" }); return; }
+      const hp = INDEX.parshiot.find((x) => x.id === b.dataset.haft);
+      if (hp && win.sefer() && hp.range[0] === readerState.slug) {
+        const card = win.bring(hp.range[3], () => $(`#haft-${hp.id}`));
+        if (card) { card.scrollIntoView({ block: "start" }); win.above(); win.note(); trackPosition(true); return; }
+      }
       location.hash = `#parsha-${b.dataset.haft}-haftarah`;
     }));
-    $$("#aliyahBody .al-item").forEach((b) => b.addEventListener("click", () => {
+    $$("#aliyahBody .al-item:not(.al-haft)").forEach((b) => b.addEventListener("click", () => {
       const p = INDEX.parshiot.find((x) => x.id === b.dataset.p);
       const st = aliyahStops(p).find((x) => x.kind === b.dataset.kind && x.n === +b.dataset.n);
       closeAllDialogs(); jumpToStop(st);
@@ -1756,7 +1650,6 @@
     const tag = $(`#al-${st.p.id}-${st.kind}-${st.n}`);
     const row = $(`#v-${st.slug}-${st.c}-${st.v}`);
     if (tag && row) {
-      sizer.drawBetween(topRow(), tag);
       const y = tag.getBoundingClientRect().top + window.scrollY - $(".topbar").offsetHeight - ($("#copybar").hidden ? 0 : $("#copybar").offsetHeight) - 8;
       window.scrollTo({ top: y, behavior: "smooth" });
       row.classList.remove("flash"); void row.offsetWidth; row.classList.add("flash");
@@ -1764,7 +1657,11 @@
     }
     const r = readerState && readerState.r;
     if (PG && PG.slug === st.slug) { pagerGoTo(st.c, st.v); return; }
-    if (r && r.view === "chapter" && r.slug === st.slug) { ensurePerek(st.c); const t2 = $(`#al-${st.p.id}-${st.kind}-${st.n}`); if (t2) { t2.scrollIntoView({ block: "start" }); sizer.rebase(); trackPosition(true); } return; }
+    if (r && r.view === "chapter" && r.slug === st.slug && win.sefer()) {
+      const t2 = win.bring(st.c, () => $(`#al-${st.p.id}-${st.kind}-${st.n}`));
+      if (t2) { t2.scrollIntoView({ block: "start" }); win.above(); win.note(); trackPosition(true); }
+      return;
+    }
     suppressOpen = true;
     location.hash = r && r.view === "parsha" ? `#parsha-${st.p.id}-${st.c}-${st.v}` : chapterHash(st.slug, st.c, st.v);
   }
@@ -1838,11 +1735,11 @@
       ${meta.enDir ? `<button type="button" class="pill ${settings.rashiEn ? "on" : ""}" data-tool="rashiEn" aria-pressed="${settings.rashiEn}">English</button>` : ""}
       ${meta.enDir && settings.rashiEn ? `<button type="button" class="pill ${settings.rashiLines ? "on" : ""}" data-tool="rashiLines" aria-pressed="${settings.rashiLines}">Line by line</button>` : ""}`;
     $$("[data-tool]", el).forEach((b) => b.addEventListener("click", () => {
-      const spot = captureSpot(), keep = () => restoreSpot(spot);
+      const spot = captureSpot();
       const k = b.dataset.tool; settings[k] = !settings[k]; saveSettings(); renderReaderTools();
-      if (k === "rashiLines") { keep(); decorateCommentary().then(keep); return; }
       if (k === "rashiOpen" && !settings.rashiOpen) readerState.open.clear();
-      keep(); decorateCommentary().then(keep);
+      repaintComm(spot);
+      if (k === "rashiLines") return;
       toast(k === "rashiOpen" ? (settings.rashiOpen ? `${meta.en} open under every pasuk` : `${meta.en} closed — tap a pasuk to open`) : (settings.rashiEn ? `English ${meta.en} on` : `English ${meta.en} off`));
     }));
   }
@@ -2113,42 +2010,48 @@
 
   const isOpen = (s, c, v) => settings.rashiOpen || (readerState && readerState.open.has(`${s}:${c}:${v}`));
 
+  /* the commentary of the open tab for these sefarim, from memory: true when everything needed is there
+     (force: whatever is there, what couldn't be loaded counts as none) */
+  function commSync(slugs, force) {
+    const st = readerState; if (!st) return false;
+    const cid = st.tab, meta = commMeta(cid);
+    if (settings.rashiLines && settings.rashiEn && !LEX && !force) return false;
+    const out = {};
+    for (const s of slugs) {
+      if (!avail(meta, s)) { out[s] = { data: null, enData: null }; continue; }
+      const he = resolved.get(commUrl(cid, s));
+      const wantEn = settings.rashiEn && meta.enDir, en = wantEn ? resolved.get(commEnUrl(cid, s)) : null;
+      if (!force && (!he || (wantEn && !en && !MISSING.has(commEnUrl(cid, s))))) return false;
+      out[s] = { data: he || null, enData: en || null };
+    }
+    st.comm = Object.assign(st.comm || {}, out);
+    return true;
+  }
+  async function loadCommFor(slugs) {
+    const st = readerState; if (!st) return;
+    if (commSync(slugs)) return;
+    const cid = st.tab, meta = commMeta(cid);
+    await Promise.all([settings.rashiLines && settings.rashiEn ? loadLex() : null, ...slugs.map((s) => avail(meta, s)
+      ? Promise.allSettled([loadComm(cid, s), settings.rashiEn && meta.enDir ? loadCommEn(cid, s) : null]) : null)]);
+    if (readerState === st) commSync(slugs, true);
+  }
+  function paintRows(rows) { for (const row of rows) paintRow(row); }
+  /* Rashi on these pesukim (all on the page, by default), loading it first if it isn't in memory */
   async function decorateCommentary(rows) {
     const st = readerState; if (!st) return;
-    if (settings.rashiLines && settings.rashiEn) await loadLex();   // line by line matches phrases with the word dictionary
-    const cid = st.tab, meta = commMeta(cid), all = !rows;
     rows = rows || $$(".reader .verse");
-    st.comm = st.comm || {};
-    const slugs = [...new Set(rows.map((r) => r.dataset.s))];
-    await Promise.all(slugs.map(async (s) => {
-      let data = null, enData = null;
-      try { data = await loadComm(cid, s); } catch { return; }
-      if (settings.rashiEn && meta.enDir) { try { enData = await loadCommEn(cid, s); } catch {} }
-      st.comm[s] = { data, enData };
-    }));
+    await loadCommFor([...new Set(rows.map((r) => r.dataset.s))]);
     if (readerState !== st) return;
-    const sb = all && st.r.view === "chapter" && $("#seferBody");
-    if (!sb || sb.children.length < 6) { rows.forEach((row) => paintRow(row)); return; }
-    // a whole sefer: the perakim on and near the screen now, the rest one at a time in quiet moments, nearest
-    // first (with Rashi always open that's every comment in the sefer — too much to build in one go)
-    const tok = st.decTok = (st.decTok || 0) + 1;
-    const ps = [...sb.children], here = st.lastPos && !st.lastPos.haft ? $(`#perek-${st.slug}-${st.lastPos.c}`) : null;
-    const k0 = Math.max(0, here ? ps.indexOf(here) : 0);
-    const paintP = (P) => { P.querySelectorAll(".verse").forEach(paintRow); };
-    const rest = [];
-    ps.forEach((P, i) => { if (Math.abs(i - k0) <= 1 || P.classList.contains("cv-on")) paintP(P); else rest.push([Math.abs(i - k0), P]); });
-    rest.sort((a, b) => a[0] - b[0]);
-    const next = (dl) => {
-      if (readerState !== st || st.decTok !== tok) return;
-      const t0 = performance.now();
-      while (rest.length && (performance.now() - t0 < 12 || (dl && dl.didTimeout))) {
-        const P = rest.shift()[1]; if (!P.isConnected) continue;
-        paintP(P); sizer.dirty(P);
-        if (dl && dl.didTimeout) break;
-      }
-      if (rest.length) idle(next, 800); else sizer.soon(100);
-    };
-    idle(next, 800);
+    win.keep(() => paintRows(rows.filter((r) => r.isConnected)));
+  }
+  /* a Rashi setting changed: every pasuk on the page painted again, your place kept */
+  function repaintComm(spot) {
+    const st = readerState; if (!st) return;
+    const rows = () => $$(".reader .verse");
+    const slugs = [...new Set(rows().map((r) => r.dataset.s))];
+    if (commSync(slugs)) { paintRows(rows()); restoreSpot(spot); return; }
+    restoreSpot(spot);
+    loadCommFor(slugs).then(() => { if (readerState === st) win.keep(() => paintRows(rows()), true); });
   }
 
   function paintRow(row) {
@@ -2174,7 +2077,7 @@
     if (settings.rashiOpen) { return; }
     const willOpen = force != null ? force : !st.open.has(key);
     if (willOpen) st.open.add(key); else st.open.delete(key);
-    paintRow(row); sizer.rebase();
+    paintRow(row); win.note();
   }
 
   function onVerseClick(e) {
@@ -2226,7 +2129,7 @@
   function pasukToTop(row) {
     const top = $(".topbar").getBoundingClientRect().bottom + ($("#copybar").hidden ? 0 : $("#copybar").offsetHeight) + 10;
     window.scrollTo(0, Math.max(0, Math.round(row.getBoundingClientRect().top + window.scrollY - top)));
-    sizer.rebase();
+    win.note();
   }
 
   function renderNotFound() {
@@ -2861,6 +2764,10 @@
     scroll: ['400 1em "Noto Serif Hebrew"', '500 1em "Noto Serif Hebrew"', '400 1em "Frank Ruhl Libre"', '700 1em "Frank Ruhl Libre"', '400 1em "EB Garamond"', 'italic 400 1em "EB Garamond"', '400 1em "Noto Rashi Hebrew"'],
   };
   const fontsAsked = new Set();
+  function fontsLoaded(kind) {
+    if (!document.fonts || !document.fonts.check) return true;
+    try { return [...FONT_FACES[kind], ...FONT_FACES.all].every((f) => document.fonts.check(f, FONT_SAMPLE)); } catch { return false; }
+  }
   function fontsReady(kind, wait = 1500) {
     if (!document.fonts || !document.fonts.load) return Promise.resolve();
     const jobs = [...FONT_FACES[kind], ...FONT_FACES.all].map((f) => { fontsAsked.add(f); return document.fonts.load(f, FONT_SAMPLE).catch(() => {}); });
@@ -2941,21 +2848,13 @@
   /* ── keeping your place when a setting changes ── */
   function captureSpot() {
     if (PG && $(".pager")) return { pages: pagerSpot() };
-    if (readerState && $(".reader")) { const row = topRow(); return row ? { row: row.id, top: row.getBoundingClientRect().top } : null; }
+    if (readerState && $(".reader")) return { scroll: win.anchorAt() };
     return null;
   }
   function restoreSpot(a) {
     if (!a) return;
     if (a.pages) { if (PG && $(".pager")) pagerReanchor(a.pages); return; }
-    const r = a.row && document.getElementById(a.row);
-    if (!r) return;
-    const d = r.getBoundingClientRect().top - a.top; if (!sizer.native && Math.abs(d) > .5) { selfScrollAt = Date.now(); window.scrollBy(0, d); }
-    // if you were partway through this pasuk's Rashi and it closed, the pasuk itself could now be above the
-    // screen: bring it back to the top, so you're still on the same pasuk
-    const line = $(".topbar").getBoundingClientRect().bottom + ($("#copybar").hidden ? 0 : $("#copybar").offsetHeight);
-    const he = r.querySelector(".v-he");
-    if (he && he.getBoundingClientRect().bottom < line + 12) { selfScrollAt = Date.now(); window.scrollBy(0, Math.round(r.getBoundingClientRect().top - (line + 8))); }
-    sizer.rebase();
+    win.restore(a.scroll, true);
   }
   const itemIdent = (it) => it && ({ type: it.type, key: it.key, parsha: it.parsha, c: it.c, v: it.v, pid: it.pid, s: it.s });
   const sameItem = (it, id) => it.type === id.type && (id.type === "intro" ? it.key === id.key
@@ -3029,12 +2928,15 @@
       else if (key === "rashiScript" && spot) restoreSpot(spot);       // a different font: same text, measured again
       return;                                                         // theme and the like: nothing on the page moves
     }
-    const keep = () => { restoreSpot(spot); if (!["theme", "copyFmt"].includes(key)) sizer.changed(); };
+    // Scroll: the change and the page put back in place happen in the same moment (one frame, the final one)
+    const keep = () => restoreSpot(spot);
     if (["nikkud", "taamim", "petuchot", "sedarim"].includes(key)) rerenderKeepingPlace();
     else if (key === "weekday" || key === "maftir") { paintAliyot(); updateAliyahBtn(readerState.lastPos); keep(); }
-    else if (key === "rashiLines") { renderReaderTools(); keep(); decorateCommentary().then(keep); }
+    else if (key === "rashiLines" || key === "rashiOpen" || key === "rashiEn") {
+      if (key === "rashiOpen" && !settings.rashiOpen) readerState.open.clear();
+      renderReaderTools(); repaintComm(spot);
+    }
     else if (key === "haftarah" || key === "haftCustom") rerenderKeepingPlace();
-    else if (key === "rashiOpen" || key === "rashiEn") { if (key === "rashiOpen" && !settings.rashiOpen) readerState.open.clear(); renderReaderTools(); keep(); decorateCommentary().then(keep); }
     else keep();                                                      // layout and font choices: same pasuk, same height on screen
   }
 
@@ -3312,7 +3214,7 @@
     }
   }
   // for checking the phrase matching from tests (no effect on the page)
-  window.__tanachDebug = { fillAboveOnce: () => { const st = readerState; const t = performance.now(); let html = ''; for (let c = 1; c < st.lo; c++) html += perekHTML(st.slug, c, st.text, st.r); const t1 = performance.now(); const body = $('#seferBody'); const tpl = document.createElement('template'); tpl.innerHTML = html; const secs = [...tpl.content.children]; const box = document.createElement('div'); box.className = 'perek-batch'; box.append(tpl.content); body.prepend(box); st.lo = 1; const t2 = performance.now(); afterInsert(secs); const t3 = performance.now(); box.getBoundingClientRect(); const t4 = performance.now(); return [t1 - t, t2 - t1, t3 - t2, t4 - t3]; }, fillAbove: () => { const st = readerState; const t = performance.now(); while (st.lo > 1) addPerakim(st, 'before'); return performance.now() - t; }, fillBelow: () => { const st = readerState; const t = performance.now(); const n = book(st.slug).verses.length; while (st.hi < n) addPerakim(st, 'after'); return performance.now() - t; }, splitPhrases, alignPhrases, alignComment, sentencesOf, extractDH, heComm, boldSeq, unB, loadLex, lexMatrix, setLexW: (w) => { LEX_W = w; } };
+  window.__tanachDebug = { splitPhrases, alignPhrases, alignComment, sentencesOf, extractDH, heComm, boldSeq, unB, loadLex, lexMatrix, setLexW: (w) => { LEX_W = w; } };
   async function boot() {
     applySettings();
     wireChrome();
