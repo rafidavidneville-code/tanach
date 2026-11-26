@@ -37,7 +37,22 @@
     </button>
     <span class="top-parsha he" id="topParsha" hidden></span>
   </div>
+  <div class="find-box" id="findBox" hidden>
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M16 16l4.5 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    <input id="findQ" type="search" enterkeyhint="search" autocapitalize="off" autocorrect="off" placeholder="Find in this sefer — Hebrew or English" autocomplete="off" spellcheck="false" dir="auto" aria-label="Find a pasuk by its Hebrew or English">
+    <span class="find-n" id="findN"></span>
+    <button type="button" class="find-step" data-d="-1" aria-label="Previous">‹</button>
+    <button type="button" class="find-step" data-d="1" aria-label="Next">›</button>
+    <button type="button" class="find-x" id="findClose" aria-label="Close">✕</button>
+    <div class="find-list" id="findList" hidden></div>
+  </div>
   <div class="topbar-actions">
+    <button class="icon-btn find-open" id="findOpen" type="button" aria-label="Find in this sefer" title="Find in this sefer (Ctrl F)">
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M5 5h9M5 9.5h6M5 14h4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="15.5" cy="14.5" r="4" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M18.5 17.5l2.5 2.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+    </button>
+    <a class="icon-btn fav-link" id="favLink" href="#favourites" aria-label="Favourites" title="Favourites">
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+    </a>
     <button class="icon-btn layout-btn" id="layoutBtn" type="button" aria-label="Switch to Pages" title="Switch to Pages">
       <svg class="ic-pages" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 6.5c-2-1.6-4.8-2-8-1.5v13c3.2-.5 6 0 8 1.5 2-1.5 4.8-2 8-1.5V5c-3.2-.5-6-.1-8 1.5zM12 6.5v13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
       <svg class="ic-scroll" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M5 5h14M5 9.5h14M5 14h14M5 18.5h9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>

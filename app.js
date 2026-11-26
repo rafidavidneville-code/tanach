@@ -229,6 +229,11 @@
     const s = decodeURIComponent((hash || "").replace(/^#/, "")).toLowerCase();
     if (!s || s === "home") return { view: "home" };
     if (s === "offline") return { view: "offline" };
+    if (s === "favourites" || s === "favorites") return { view: "favourites" };
+    if (s === "divrei-torah") return { view: "divrei" };
+    if (s === "dvar-new") return { view: "dvar-edit", id: null };
+    let d = s.match(/^dvar-edit-([a-z0-9]+)$/); if (d) return { view: "dvar-edit", id: d[1] };
+    d = s.match(/^dvar-([a-z0-9]+)$/); if (d) return { view: "dvar", id: d[1] };
     let m = s.match(/^parsha-([a-z-]+?)(?:-(\d+)-(\d+)|-(haftarah))?$/);
     if (m) {
       const p = INDEX.parshiot.find((x) => x.id === m[1]);
@@ -251,6 +256,8 @@
     const tok = ++routeTok;
     if (veilUp && !layoutSwitch) veilTo(false, 120);   // a change of view cut short by this one
     const r = parseRoute(location.hash);
+    // opening anything from the Home page opens it in Scroll
+    if (current && current.view === "home" && (r.view === "chapter" || r.view === "parsha") && settings.view === "pages") { settings.view = "scroll"; saveSettings(); }
     closeAllDialogs();
     if (settings.view === "pages" && r.view === "parsha") {
       const p = r.p;
@@ -282,16 +289,693 @@
     current = r;
     readerState = null;
     $("#aliyahBtn").hidden = true; $("#topParsha").hidden = true; document.body.classList.remove("has-parsha");
+    document.body.classList.toggle("home-view", r.view === "home");
+    document.body.classList.remove("scroll-reader"); closeFind();
     let work;
     if (r.view === "home") renderHome();
     else if (r.view === "offline") renderOffline();
+    else if (r.view === "favourites") work = renderFavPage();
+    else if (r.view === "divrei") renderDivreiPage();
+    else if (r.view === "dvar") renderDvarPage(r.id);
+    else if (r.view === "dvar-edit") renderDvarEdit(r.id);
     else if (r.view === "chapter" || r.view === "parsha") work = renderReader(r);
     else renderNotFound();
+    const toTop = r.view !== "chapter" && r.view !== "parsha";
+    if (toTop) { window.scrollTo(0, 0); if (work) work = Promise.resolve(work).then((x) => { if (tok === routeTok) window.scrollTo(0, 0); return x; }); }
     if (veil) {
       if (work) await Promise.all([Promise.race([work, sleep(900)]), fontsReady(settings.view === "pages" ? "pages" : "scroll", 900)]);
       await frames(2); if (tok === routeTok) await veilTo(false, 170);
     }
     else if (work) await work;
+  }
+
+  /* ═════════ Favourites page · Divrei Torah ═════════
+     Favourites: pesukim {b, c, v}, comments of a meforash {b, c, v, cid, i}, paragraphs of an introduction
+     {kind: "intro", cid, b, key, p}. They live on their own page (#favourites) with search and filters; the divrei
+     Torah you paste in live beside it (#divrei-torah), each with the pesukim and meforshim it quotes found and linked.
+     Both are kept in this browser (localStorage), with export / import. */
+  const isCommFav = (cid, s, c, v, i) => favourites.some((f) => f.cid === cid && f.kind !== "intro" && f.b === s && f.c === c && f.v === v && f.i === i);
+  const isIntroFav = (cid, s, key, p) => favourites.some((f) => f.kind === "intro" && f.cid === cid && f.b === s && f.key === key && f.p === p);
+  function toggleCommFav(cid, s, c, v, i) {
+    const m = commMeta(cid);
+    if (isCommFav(cid, s, c, v, i)) { favourites = favourites.filter((f) => !(f.cid === cid && f.kind !== "intro" && f.b === s && f.c === c && f.v === v && f.i === i)); toast("Removed from favourites"); }
+    else { favourites.push({ b: s, c, v, cid, i, t: Date.now() }); toast(`★ ${m ? m.en : cid} on ${refEn(s, c, v)} added to favourites`); }
+    store.set("favourites", favourites); syncCommMarks(cid, s, c, v, i);
+  }
+  function toggleIntroFav(cid, s, key, p, c, v) {
+    const m = commMeta(cid);
+    if (isIntroFav(cid, s, key, p)) { favourites = favourites.filter((f) => !(f.kind === "intro" && f.cid === cid && f.b === s && f.key === key && f.p === p)); toast("Removed from favourites"); }
+    else { favourites.push({ kind: "intro", cid, b: s, key, p, c: c || 1, v: v || 1, t: Date.now() }); toast(`★ ${m ? introName(m) : "Introduction"} added to favourites`); }
+    store.set("favourites", favourites);
+    $$(`.tx-fav[data-if="${cid}:${s}:${key}:${p}"]`).forEach((b) => setTxFav(b, isIntroFav(cid, s, key, p)));
+  }
+  function setTxFav(b, on) { b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); const sp = $("span", b); if (sp) sp.textContent = on ? "Favourite" : "Add to favourites"; }
+  function syncCommMarks(cid, s, c, v, i) {
+    const on = isCommFav(cid, s, c, v, i);
+    $$(`.rrow[data-cid="${cid}"][data-s="${s}"][data-c="${c}"][data-v="${v}"][data-i="${i}"] .c-bm`).forEach((b) => { b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); });
+    $$(`.tx-fav[data-cf="${cid}:${s}:${c}:${v}:${i}"]`).forEach((b) => setTxFav(b, on));
+  }
+  // what used to be a comment bookmark is a favourite now
+  (() => {
+    const cm = bookmarks.filter((b) => b.cid); if (!cm.length) return;
+    for (const b of cm) if (!favourites.some((f) => f.cid === b.cid && f.kind !== "intro" && f.b === b.b && f.c === b.c && f.v === b.v && f.i === b.i)) favourites.push({ b: b.b, c: b.c, v: b.v, cid: b.cid, i: b.i, t: b.t || Date.now() });
+    bookmarks = bookmarks.filter((b) => !b.cid); store.set("bookmarks", bookmarks); store.set("favourites", favourites);
+  })();
+
+  const iconScrollDoc = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M7 3.5h8.5L19 7v13.5H7zM15.5 3.5V7H19M10 11h6M10 14.5h6M10 18h4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+  const heNorm = (t) => (t || "").replace(RE_TAAMIM, "").replace(RE_NIKKUD, "").replace(/[־]/g, " ").replace(/[״"׳'`]/g, "").replace(/[^א-ת\s]/g, " ").replace(/\s+/g, " ").trim();
+  function parshiotAt(s, c, v) {
+    return INDEX.parshiot.filter((p) => p.range[0] === s && (c > p.range[1] || (c === p.range[1] && v >= p.range[2])) && (c < p.range[3] || (c === p.range[3] && v <= p.range[4])));
+  }
+  const savedTabs = (on) => `<nav class="sp-tabs" aria-label="Favourites and divrei Torah">
+      <a href="#favourites" class="${on === "fav" ? "on" : ""}">${iconStar}<span class="en">Favourites</span><span class="he">מועדפים</span></a>
+      <a href="#divrei-torah" class="${on === "dt" ? "on" : ""}">${iconScrollDoc}<span class="en">Divrei Torah</span><span class="he">דברי תורה</span></a>
+    </nav>`;
+  /* opening a source from these pages: Scroll (a meforash other than Rashi only shows in Pages) */
+  function openSource(x) {
+    if (x.kind === "intro" || x.k === "i") {
+      settings.view = "pages"; saveSettings();
+      pendingPgIntro = { s: x.s, key: x.parsha ? x.key : "sefer", parsha: x.parsha || null, anchor: `i:${x.cid}:${x.key}:${x.p}` };
+      const h = chapterHash(x.s, x.c || 1); if (location.hash === h) route(); else location.hash = h; return;
+    }
+    const cid = x.cid;
+    if (cid) { pendingComment = { cid, s: x.s, c: x.c, v: x.v, i: x.i }; settings.view = cid === "rashi" ? "scroll" : "pages"; }
+    else settings.view = "scroll";
+    saveSettings();
+    const h = chapterHash(x.s, x.c, x.v); if (location.hash === h) route(); else location.hash = h;
+  }
+  let pendingPgIntro = null;
+
+  /* ── favourites as things to show and search ── */
+  async function favRecords() {
+    const list = favourites.filter((f) => INDEX.books[f.b] && (!f.cid || commMeta(f.cid)));
+    const jobs = [];
+    for (const f of list) {
+      if (!f.cid) jobs.push(loadText(f.b));
+      else if (f.kind === "intro") { const m = commMeta(f.cid); if (m.introDir) jobs.push(fetchJSON(m.introDir + f.b + ".json")); }
+      else { jobs.push(loadComm(f.cid, f.b)); if (commMeta(f.cid).enDir) jobs.push(loadCommEn(f.cid, f.b)); }
+    }
+    await Promise.allSettled(jobs);
+    return list.map(favRecord).filter(Boolean);
+  }
+  function favRecord(f) {
+    const b = book(f.b);
+    const base = { f, s: f.b, c: f.c, v: f.v, i: f.i, sec: b.section, cid: f.cid || "", kind: !f.cid ? "pasuk" : f.kind === "intro" ? "intro" : "comm" };
+    const fin = (he, en, extra) => Object.assign(base, { heHtml: he, enHtml: en, he: heNorm(htmlToText(he)), en: htmlToText(en).toLowerCase() }, extra);
+    if (base.kind === "pasuk") {
+      const t = resolved.get(textUrl(f.b)); if (!t || !t.he[f.c - 1]) return null;
+      return fin(heText(t.he[f.c - 1][f.v - 1] || ""), t.en[f.c - 1][f.v - 1] || "", { dh: "", parsha: parshiotAt(f.b, f.c, f.v).map((p) => p.id), key: `p:${f.b}:${f.c}:${f.v}` });
+    }
+    const m = commMeta(f.cid);
+    if (base.kind === "intro") {
+      const d = resolved.get(m.introDir + f.b + ".json"), sc = d && d.find((x) => x.key === f.key); if (!sc) return null;
+      return fin(heComm(sc.he_p[f.p] || ""), (sc.en_p || [])[f.p] || "", { dh: "", parsha: sc.parsha ? [sc.parsha] : [], secName: sc, key: `i:${f.cid}:${f.b}:${f.key}:${f.p}`, parshaId: sc.parsha || null, ikey: f.key, p: f.p });
+    }
+    const hd = resolved.get(commUrl(f.cid, f.b)), ed = m.enDir ? resolved.get(commEnUrl(f.cid, f.b)) : null;
+    const he = hd ? at(hd, f.c, f.v)[f.i] : null; if (!he) return null;
+    return fin(heComm(he), ed ? at(ed, f.c, f.v)[f.i] || "" : "", { dh: heNorm(extractDH(he).dh), parsha: parshiotAt(f.b, f.c, f.v).map((p) => p.id), key: `c:${f.cid}:${f.b}:${f.c}:${f.v}:${f.i}` });
+  }
+  const FAV_F = { q: "", sec: "", kind: "", sefer: "", parsha: "", cid: "", c: "", v: "", dh: "" };
+  const numOf = (x) => { x = (x || "").trim(); if (!x) return null; return /^\d+$/.test(x) ? +x : parseGematria(x) || null; };
+  function favMatches(r, F) {
+    if (F.sec && r.sec !== F.sec) return false;
+    if (F.kind && r.kind !== F.kind) return false;
+    if (F.sefer && r.s !== F.sefer) return false;
+    if (F.parsha && !r.parsha.includes(F.parsha)) return false;
+    if (F.cid && r.cid !== F.cid) return false;
+    const c = numOf(F.c), v = numOf(F.v);
+    if (c && (r.kind === "intro" || r.c !== c)) return false;
+    if (v && (r.kind === "intro" || r.v !== v)) return false;
+    if (F.dh) { const d = heNorm(F.dh); if (r.kind !== "comm" || !r.dh.includes(d)) return false; }
+    if (F.q) {
+      for (const w of F.q.trim().split(/\s+/)) {
+        if (/[א-ת]/.test(w)) { const h = heNorm(w); if (h && !r.he.includes(h)) return false; }
+        else if (!r.en.includes(w.toLowerCase())) return false;
+      }
+    }
+    return true;
+  }
+  function recLabel(r) {
+    if (r.kind === "pasuk") return [`Pasuk`, "פסוק"];
+    const m = commMeta(r.cid);
+    if (r.kind === "intro") return [`${m.en} · Introduction${r.secName && r.secName.en && r.secName.en !== "Introduction" ? " · " + r.secName.en : ""}`, introName(m)];
+    return [m.en, m.he];
+  }
+  function recRef(r) {
+    if (r.kind === "intro") {
+      const p = r.parshaId && INDEX.parshiot.find((x) => x.id === r.parshaId);
+      return [p ? `Parashat ${p.en}` : book(r.s).en, p ? `פרשת ${p.he}` : book(r.s).he];
+    }
+    return [refEn(r.s, r.c, r.v), refHe(r.s, r.c, r.v)];
+  }
+  function dtLinksFor(keys) {
+    const ids = new Set(); for (const k of keys) for (const id of dtIndex().get(k) || []) ids.add(id);
+    return [...ids].map((id) => divrei.find((d) => d.id === id)).filter(Boolean);
+  }
+  function recCard(r) {
+    const [le, lh] = recLabel(r), [re, rh] = recRef(r);
+    const dts = dtLinksFor(r.kind === "comm" ? [r.key, `p:${r.s}:${r.c}:${r.v}`] : [r.key]);
+    return `<div class="fcard" data-key="${esc(r.key)}" tabindex="0" role="link">
+        <div class="fc-top"><span class="fc-kind">${esc(le)} · <span class="he">${esc(lh)}</span></span>
+          <button type="button" class="fc-star on" data-unfav="${esc(r.key)}" aria-label="Remove from favourites" title="Remove from favourites">${iconStar}</button></div>
+        <div class="fc-ref"><span class="en">${esc(re)}</span><span class="he">${esc(rh)}</span></div>
+        <div class="fc-he">${r.heHtml}</div>
+        ${r.enHtml ? `<div class="fc-en">${r.enHtml}</div>` : ""}
+        ${dts.length ? `<div class="fc-dt">${dts.map((d) => `<a href="#dvar-${d.id}" class="dt-link">${iconScrollDoc}<span>${esc(d.title || "Dvar Torah")}</span></a>`).join("")}</div>` : ""}
+      </div>`;
+  }
+  function unfav(key) {
+    const [k, ...a] = key.split(":");
+    if (k === "p") { const [s, c, v] = a; removeFav(s, +c, +v); syncMarks(s, +c, +v); }
+    else if (k === "c") { const [cid, s, c, v, i] = a; if (isCommFav(cid, s, +c, +v, +i)) toggleCommFav(cid, s, +c, +v, +i); }
+    else if (k === "i") { const [cid, s, ikey, p] = a; if (isIntroFav(cid, s, ikey, +p)) toggleIntroFav(cid, s, ikey, +p); }
+  }
+  async function renderFavPage() {
+    leavePages(); setPicker(null);
+    document.title = "Favourites — Tanach Reader";
+    const app = $("#app");
+    app.innerHTML = `<div class="saved-page">${savedTabs("fav")}<div class="loading" style="padding:30px 0">טוען…</div></div>`;
+    const recs = await favRecords();
+    if (current.view !== "favourites") return;
+    const F = FAV_F;
+    const opts = (vals, all) => `<option value="">${esc(all)}</option>` + vals.map(([v, t]) => `<option value="${esc(v)}">${esc(t)}</option>`).join("");
+    const sefarim = ORDER.filter((s) => recs.some((r) => r.s === s)).map((s) => [s, `${book(s).en} · ${book(s).he}`]);
+    const parshiot = INDEX.parshiot.filter((p) => recs.some((r) => r.parsha.includes(p.id))).map((p) => [p.id, `${p.en} · ${p.he}`]);
+    const cids = COMMENTARIES.filter((m) => recs.some((r) => r.cid === m.id)).map((m) => [m.id, `${m.en} · ${m.he}`]);
+    const chips = (name, list) => `<div class="sp-chips" data-f="${name}">${list.map(([v, en, he]) => `<button type="button" data-v="${v}" class="${F[name] === v ? "on" : ""}">${esc(en)}${he ? ` <span class="he">${esc(he)}</span>` : ""}</button>`).join("")}</div>`;
+    app.innerHTML = `<div class="saved-page">
+        ${savedTabs("fav")}
+        <div class="sp-search"><input type="search" id="spQ" value="${esc(F.q)}" placeholder="Search the Hebrew or English…  חיפוש" autocomplete="off" spellcheck="false" aria-label="Search your favourites"></div>
+        <div class="sp-filters">
+          ${chips("sec", [["", "All"], ...INDEX.sections.map((s) => [s.id, s.en, s.he])])}
+          ${chips("kind", [["", "Everything"], ["pasuk", "Pesukim", "פסוקים"], ["comm", "Meforshim", "מפרשים"], ["intro", "Introductions", "הקדמות"]])}
+          <div class="sp-row">
+            <select data-f="sefer" aria-label="Sefer">${opts(sefarim, "Every sefer")}</select>
+            <select data-f="parsha" aria-label="Parsha">${opts(parshiot, "Every parsha")}</select>
+            <select data-f="cid" aria-label="Meforash">${opts(cids, "Every meforash")}</select>
+          </div>
+          <div class="sp-row">
+            <input data-f="c" value="${esc(F.c)}" placeholder="Perek  פרק" inputmode="text" aria-label="Perek">
+            <input data-f="v" value="${esc(F.v)}" placeholder="Pasuk  פסוק" inputmode="text" aria-label="Pasuk">
+            <input data-f="dh" value="${esc(F.dh)}" placeholder="Dibbur hamatchil  ד״ה" aria-label="Dibbur hamatchil" dir="rtl">
+            <button type="button" class="sp-clear">Clear</button>
+          </div>
+        </div>
+        <div id="spResults"></div>
+      </div>`;
+    $$(".sp-filters select", app).forEach((s) => { s.value = F[s.dataset.f] || ""; });
+    const draw = () => {
+      const hits = recs.filter((r) => favMatches(r, F)).sort((a, b) => ORDER.indexOf(a.s) - ORDER.indexOf(b.s) || a.c - b.c || a.v - b.v || (a.kind === "pasuk" ? -1 : 1) - (b.kind === "pasuk" ? -1 : 1) || COMMENTARIES.findIndex((m) => m.id === a.cid) - COMMENTARIES.findIndex((m) => m.id === b.cid) || (a.i || 0) - (b.i || 0));
+      const res = $("#spResults");
+      if (!recs.length) { res.innerHTML = `<p class="empty">No favourites yet — tap the ☆ beside any pasuk, or on any comment of a meforash.</p>`; return; }
+      if (!hits.length) { res.innerHTML = `<p class="empty">Nothing matches.</p>`; return; }
+      res.innerHTML = `<div class="sp-count">${hits.length} of ${recs.length}</div>` + INDEX.sections.map((sec) => {
+        const g = hits.filter((r) => r.sec === sec.id); if (!g.length) return "";
+        return `<div class="saved-group"><div class="group-label saved-label"><span class="en">${esc(sec.en)}<small>${g.length}</small></span><span class="he">${esc(sec.he)}</span></div><div class="fcards">${g.map(recCard).join("")}</div></div>`;
+      }).join("");
+    };
+    draw();
+    let t = 0;
+    $("#spQ").addEventListener("input", (e) => { F.q = e.target.value; clearTimeout(t); t = setTimeout(draw, 150); });
+    $$(".sp-filters input[data-f]", app).forEach((inp) => inp.addEventListener("input", () => { F[inp.dataset.f] = inp.value; clearTimeout(t); t = setTimeout(draw, 150); }));
+    $$(".sp-filters select", app).forEach((sel) => sel.addEventListener("change", () => { F[sel.dataset.f] = sel.value; draw(); }));
+    $$(".sp-chips", app).forEach((g) => g.addEventListener("click", (e) => {
+      const b = e.target.closest("button"); if (!b) return;
+      F[g.dataset.f] = b.dataset.v; $$("button", g).forEach((x) => x.classList.toggle("on", x === b)); draw();
+    }));
+    $(".sp-clear", app).addEventListener("click", () => { Object.keys(F).forEach((k) => (F[k] = "")); renderFavPage(); });
+    $("#spResults").addEventListener("click", (e) => {
+      const u = e.target.closest("[data-unfav]");
+      if (u) { e.stopPropagation(); unfav(u.dataset.unfav); const i = recs.findIndex((r) => r.key === u.dataset.unfav); if (i >= 0) recs.splice(i, 1); draw(); return; }
+      if (e.target.closest("a")) return;
+      const card = e.target.closest(".fcard"); if (!card) return;
+      const r = recs.find((x) => x.key === card.dataset.key); if (!r) return;
+      openSource(r.kind === "intro" ? { kind: "intro", s: r.s, cid: r.cid, key: r.ikey, p: r.p, parsha: r.parshaId, c: r.c } : { s: r.s, c: r.c, v: r.v, cid: r.kind === "comm" ? r.cid : "", i: r.i });
+    });
+  }
+
+  /* ── divrei Torah ── */
+  let divrei = store.get("divrei", []);
+  let DT_INDEX = null;
+  const saveDivrei = () => { store.set("divrei", divrei); DT_INDEX = null; };
+  /* every source key → the divrei Torah that quote it ("p:s:c:v" for a pasuk, "c:cid:s:c:v:i" for a comment) */
+  function dtIndex() {
+    if (DT_INDEX) return DT_INDEX;
+    DT_INDEX = new Map();
+    for (const d of divrei) for (const x of d.src || []) {
+      const keys = x.k === "c" ? [`c:${x.cid}:${x.s}:${x.c}:${x.v}:${x.i}`, `p:${x.s}:${x.c}:${x.v}`] : x.v ? [`p:${x.s}:${x.c}:${x.v}`] : [];
+      for (const k of keys) { const l = DT_INDEX.get(k) || []; if (!l.includes(d.id)) l.push(d.id); DT_INDEX.set(k, l); }
+    }
+    return DT_INDEX;
+  }
+  /* finding what a dvar Torah quotes:
+       • references — בראשית א, ב · (שמות כ:ב) · Bereshit 1:2 · Genesis 1:2 · Gen. 1:2 · Shemot 20 …
+       • the words of a pasuk quoted in Hebrew (three or more running together, letters only), matched against every
+         pasuk of Tanach (data/search/he.json)
+       • a meforash named next to a pasuk (רש״י, the Ramban, Ibn Ezra …): his comment on it — the one whose words are
+         quoted, if any are; and any comment on a pasuk it mentions whose words it quotes, named or not */
+  const MEF_NAMES = [
+    ["rashi", /רש["״]?י|\bRashi\b/g], ["ramban", /(?:ה)?רמב["״]?ן|\bRamban\b|Nachmanides/g], ["ibnezra", /(?:ה)?אבן עזרא|ראב["״]?ע|\bIbn Ezra\b/g],
+    ["bachya", /רבינו בחיי|רבנו בחיי|\bBachya\b|\bBechaye\b/g], ["sforno", /(?:ה)?ספורנו|\bS[fp]orno\b/g], ["kliyakar", /(?:ה)?כלי יקר|\bK[e]?li Yakar\b/g],
+    ["orhachaim", /(?:ה)?אור החיים|\bO[h]?r Ha[Cc]haim\b|\bOr HaChayim\b/g], ["beishalevi", /(?:ה)?בית הלוי|\bBei[ts] HaLevi\b/g],
+  ];
+  function heTokens(text) {
+    const out = []; const re = /[א-ת][א-ת֑-ׇ"'״׳]*/g; let m;
+    while ((m = re.exec(text))) {
+      let w = m[0].replace(RE_TAAMIM, "").replace(RE_NIKKUD, "");
+      const godName = /^[הד]['׳]$/.test(w);
+      w = w.replace(/["'״׳]/g, "");
+      if (godName || w === "יקוק" || w === "יהוה" || w === "ה") w = "יהוה";
+      else if (/^(אלקים|אלוקים|אלוהים)$/.test(w)) w = "אלהים";
+      out.push({ w, a: m.index, b: m.index + m[0].length });
+    }
+    return out;
+  }
+  async function findSources(text) {
+    const found = [];                                  // {k: "p"|"c", s, c, v, cid, i, a, b}
+    const HE = await fetchJSON("data/search/he.json").catch(() => null);
+    // 1. references
+    const bookPat = [];
+    for (const [s, b] of Object.entries(INDEX.books)) { bookPat.push([b.he.replace(/["״׳']/g, ""), s]); }
+    for (const [a, s] of Object.entries(HE_ALIASES)) bookPat.push([a, s]);
+    bookPat.sort((x, y) => y[0].length - x[0].length);
+    const G = `[א-ת]{1,3}["'״׳]?[א-ת]?`;
+    const heRef = new RegExp(`(${bookPat.map((x) => x[0].replace(/ /g, "\\s+")).join("|")})\\s*,?\\s*(?:פרק\\s*)?(${G})(?:\\s*[,:\\s]\\s*(?:פסוק\\s*)?(${G}))?(?![א-ת])`, "g");
+    let m;
+    while ((m = heRef.exec(text))) {
+      const name = m[1].replace(/\s+/g, " "), s = (bookPat.find((x) => x[0] === name) || [])[1]; if (!s) continue;
+      const c = parseGematria(m[2]), v = m[3] ? parseGematria(m[3]) : null;
+      if (!(c >= 1 && c <= book(s).verses.length)) continue;
+      if (v && !(v >= 1 && v <= book(s).verses[c - 1])) continue;
+      found.push({ k: "p", s, c, v: v || null, a: m.index, b: m.index + m[0].length, ref: true });
+    }
+    const enRef = /\b((?:I{1,2}|1|2)\s*)?([A-Z][a-z]+(?:\s(?:Hashirim|HaShirim|of\sSongs|Hayamim|HaYamim))?)\.?\s+(\d{1,3})(?:\s*[:.,]\s*(\d{1,3}))?/g;
+    while ((m = enRef.exec(text))) {
+      const q = ((m[1] || "") + m[2]).trim();
+      const k = q.toLowerCase().replace(/[^a-z0-9]/g, ""), n = normEnBook(q);
+      // an abbreviation the site knows (Gen., Ex., Ps.), or four letters or more of a sefer's name (Bereshit, Genesis, Shmuel I)
+      const books = findBooks(q).filter((s) => ABBR[n] === s || (k.length >= 4 && (bookKeys(s).some((f) => f.startsWith(k)) || s.startsWith(n))));
+      const s = books[0]; if (!s) continue;
+      const c = +m[3], v = m[4] ? +m[4] : null;
+      if (!(c >= 1 && c <= book(s).verses.length)) continue;
+      if (v && !(v >= 1 && v <= book(s).verses[c - 1])) continue;
+      found.push({ k: "p", s, c, v, a: m.index, b: m.index + m[0].length, ref: true });
+    }
+    // 2. quoted pesukim (Hebrew) — the words of a reference (בראשית א, ב) don't count as quoted words
+    const refSpans = found.slice();
+    const T = heTokens(text).map((t) => (refSpans.some((f) => t.a >= f.a && t.b <= f.b) ? Object.assign(t, { w: "\u0000" + t.w }) : t));
+    const usable = (t) => t && t.w[0] !== "\u0000";
+    if (HE && T.length >= 3) {
+      const tri = new Map();
+      for (let i = 0; i + 2 < T.length; i++) { if (!usable(T[i]) || !usable(T[i + 1]) || !usable(T[i + 2])) continue; const k = `${T[i].w} ${T[i + 1].w} ${T[i + 2].w}`; (tri.get(k) || tri.set(k, []).get(k)).push(i); }
+      const cands = [];
+      for (const [s, chs] of Object.entries(HE)) chs.forEach((vs, ci) => vs.forEach((txt, vi) => {
+        if (!txt) return;
+        const W = txt.split(" ");
+        for (let j = 0; j + 2 < W.length; j++) {
+          const hits = tri.get(`${W[j]} ${W[j + 1]} ${W[j + 2]}`); if (!hits) continue;
+          for (const i of hits) {
+            let n = 3; while (i + n < T.length && j + n < W.length && T[i + n].w === W[j + n]) n++;
+            if (j > 0 && i > 0 && T[i - 1].w === W[j - 1]) continue;        // counted from where the run starts
+            cands.push({ s, c: ci + 1, v: vi + 1, i, n, letters: T.slice(i, i + n).reduce((t, x) => t + x.w.length, 0), whole: n === W.length });
+          }
+        }
+      }));
+      const refSefarim = new Set(found.map((f) => f.s)), refPesukim = new Set(found.filter((f) => f.v).map((f) => `${f.s}:${f.c}:${f.v}`));
+      // the longest runs first; a run found in several pesukim goes to one the text names, or isn't linked
+      const byStart = new Map();
+      for (const x of cands) { if (x.letters < 9) continue; const k = `${x.i}:${x.n}`; (byStart.get(k) || byStart.set(k, []).get(k)).push(x); }
+      const runs = [...byStart.values()].sort((a, b) => b[0].n - a[0].n);
+      const taken = new Array(T.length).fill(false);
+      for (const group of runs) {
+        const { i, n } = group[0];
+        if (taken.slice(i, i + n).some(Boolean)) continue;
+        let pick = null;
+        if (group.length === 1) pick = group[0];
+        else pick = group.find((x) => refPesukim.has(`${x.s}:${x.c}:${x.v}`)) || (group.filter((x) => refSefarim.has(x.s)).length === 1 ? group.find((x) => refSefarim.has(x.s)) : null) || (group.length <= 2 && n >= 6 ? group[0] : null);
+        // three words are enough only for a whole short pasuk, a sefer the text names, or long words
+        if (!pick || (n < 4 && !pick.whole && !refSefarim.has(pick.s) && pick.letters < 14)) continue;
+        for (let t = i; t < i + n; t++) taken[t] = true;
+        found.push({ k: "p", s: pick.s, c: pick.c, v: pick.v, a: T[i].a, b: T[i + n - 1].b, quote: true });
+      }
+    }
+    // 3. meforshim: named beside a pasuk, and their words quoted
+    const pes = found.filter((f) => f.k === "p" && f.v);
+    const sefarim = [...new Set(pes.map((f) => f.s))].slice(0, 4);
+    const avail = (cid, s) => (INDEX.comm[cid] || []).includes(s);
+    await Promise.allSettled(sefarim.flatMap((s) => COMMENTARIES.filter((cm) => avail(cm.id, s)).map((cm) => loadComm(cm.id, s))));
+    const commTokens = (cid, s, c, v) => { const d = resolved.get(commUrl(cid, s)); return d ? at(d, c, v).map((h) => heTokens(htmlToText(h)).map((x) => x.w)) : []; };
+    const quoteIn = (toks, from, to, ok) => {  // the longest run of the dvar Torah's words (within from..to) in a comment
+      let best = null;
+      for (let i = 0; i < T.length; i++) {
+        if (T[i].a < from || T[i].a > to || !usable(T[i])) continue;
+        for (let j = 0; j < toks.length; j++) {
+          if (toks[j] !== T[i].w) continue;
+          let n = 1; while (i + n < T.length && j + n < toks.length && T[i + n].w === toks[j + n]) n++;
+          const letters = T.slice(i, i + n).reduce((t, x) => t + x.w.length, 0);
+          if (n >= 3 && letters >= 9 && (!best || n > best.n) && (!ok || ok({ i, n }))) best = { i, n };
+        }
+      }
+      return best;
+    };
+    // words a comment shares with the pasuk it is on are the pasuk's (the comment quoting its pasuk), not the comment's
+    const inPasuk = (p, q) => { const W = HE && HE[p.s] && HE[p.s][p.c - 1] && HE[p.s][p.c - 1][p.v - 1]; return !!W && (" " + W + " ").includes(" " + T.slice(q.i, q.i + q.n).map((x) => x.w).join(" ") + " "); };
+    for (const [cid, re] of MEF_NAMES) {
+      if (!COMMENTARIES.some((cm) => cm.id === cid)) continue;
+      re.lastIndex = 0;
+      while ((m = re.exec(text))) {
+        const at0 = m.index;
+        // the pasuk he is speaking about: the nearest one named or quoted before him in the same paragraph, else just after
+        const para0 = text.lastIndexOf("\n\n", at0) + 1, para1 = (text.indexOf("\n\n", at0) + 1 || text.length + 1) - 1;
+        const before = pes.filter((f) => f.b <= at0 && f.a >= para0).sort((x, y) => y.b - x.b)[0];
+        const after = pes.filter((f) => f.a >= at0 && f.a <= Math.min(para1, at0 + 160)).sort((x, y) => x.a - y.a)[0];
+        // his comment: the one (on that pasuk or one near it) whose words are quoted after his name; with none
+        // quoted, his first comment on the pasuk itself
+        let best = null;
+        for (const q of [before, after].filter(Boolean)) for (let dv = -2; dv <= 2; dv++) {
+          const v = q.v + dv; if (v < 1 || v > book(q.s).verses[q.c - 1] || !avail(cid, q.s)) continue;
+          commTokens(cid, q.s, q.c, v).forEach((toks, i) => {
+            const qq = quoteIn(toks, at0, Math.min(para1, at0 + 1200), (r) => !inPasuk({ s: q.s, c: q.c, v }, r));
+            const sc = (qq ? qq.n * 10 : 0) - Math.abs(dv) - (q === before ? 0 : .5);
+            if (!best || sc > best.sc) best = { s: q.s, c: q.c, v, i, q: qq && sc > 0 ? qq : null, sc };
+          });
+        }
+        if (!best || (!best.q && best.v !== (before || after).v)) continue;
+        found.push({ k: "c", cid, s: best.s, c: best.c, v: best.v, i: best.i, a: at0, b: at0 + m[0].length, named: true });
+        if (best.q) found.push({ k: "c", cid, s: best.s, c: best.c, v: best.v, i: best.i, a: T[best.q.i].a, b: T[best.q.i + best.q.n - 1].b, quote: true, named: true });
+      }
+    }
+    // quoted comments on the pesukim it speaks of, even unnamed (four or more words)
+    for (const p of pes) for (const cm of COMMENTARIES) {
+      if (!avail(cm.id, p.s)) continue;
+      commTokens(cm.id, p.s, p.c, p.v).forEach((toks, i) => {
+        const q = quoteIn(toks, 0, text.length, (r) => r.n >= 4 && !inPasuk(p, r));
+        if (q && !found.some((f) => f.k === "c" && f.a <= T[q.i].a && f.b >= T[q.i + q.n - 1].b))
+          found.push({ k: "c", cid: cm.id, s: p.s, c: p.c, v: p.v, i, a: T[q.i].a, b: T[q.i + q.n - 1].b, quote: true });
+      });
+    }
+    // one link per stretch of text: a comment over the pasuk it is on; the longer over the shorter
+    found.sort((x, y) => x.a - y.a || (y.b - y.a) - (x.b - x.a));
+    const out = [];
+    for (const f of found) {
+      const o = out.find((x) => f.a < x.b && x.a < f.b);
+      if (!o) { out.push(f); continue; }
+      if (f.k === "c" && o.k === "p" && f.s === o.s && f.c === o.c && f.v === o.v) { out.splice(out.indexOf(o), 1, f); }
+    }
+    return out.map(({ k, s, c, v, cid, i, a, b }) => (k === "c" ? { k, s, c, v, cid, i, a, b } : { k, s, c, v, a, b }));
+  }
+  const srcKey = (x) => (x.k === "c" ? `c:${x.cid}:${x.s}:${x.c}:${x.v}:${x.i}` : `p:${x.s}:${x.c}:${x.v || ""}`);
+  function srcLabel(x) {
+    const ref = x.v ? [refEn(x.s, x.c, x.v), refHe(x.s, x.c, x.v)] : [`${book(x.s).en} ${x.c}`, `${book(x.s).he} ${plainGem(x.c)}`];
+    if (x.k !== "c") return ref;
+    const m = commMeta(x.cid); return [`${m.en} on ${ref[0]}`, `${m.he} על ${ref[1]}`];
+  }
+  const srcFav = (x) => (x.k === "c" ? isCommFav(x.cid, x.s, x.c, x.v, x.i) : x.v ? isFav(x.s, x.c, x.v) : false);
+  const dvarDate = (t) => { try { return new Date(t).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }); } catch { return ""; } };
+  function dvarBodyHTML(d) {
+    const text = d.text || "", src = (d.src || []).slice().sort((a, b) => a.a - b.a);
+    let h = "", pos = 0;
+    for (const [n, x] of src.entries()) {
+      if (x.a < pos) continue;
+      h += esc(text.slice(pos, x.a));
+      const [le] = srcLabel(x);
+      h += `<a class="dt-src${srcFav(x) ? " fav" : ""}" href="#" data-n="${(d.src || []).indexOf(x)}" title="${esc(le)}">${esc(text.slice(x.a, x.b))}</a>`;
+      pos = x.b;
+    }
+    h += esc(text.slice(pos));
+    return h.split(/\n{2,}/).map((p) => `<p dir="auto">${p.replace(/\n/g, "<br>")}</p>`).join("");
+  }
+  function sourcesListHTML(d) {
+    const seen = new Set(), rows = [];
+    (d.src || []).forEach((x, n) => { const k = srcKey(x); if (seen.has(k)) return; seen.add(k); rows.push([x, n]); });
+    if (!rows.length) return `<p class="empty">No pesukim or meforshim were found in it.</p>`;
+    return rows.map(([x, n]) => { const [le, lh] = srcLabel(x); const f = srcFav(x);
+      return `<div class="dt-srow"><a href="#" class="dt-open" data-n="${n}"><span class="en">${esc(le)}</span><span class="he">${esc(lh)}</span></a>
+        ${x.v ? `<button type="button" class="fc-star ${f ? "on" : ""}" data-favsrc="${n}" aria-pressed="${f}" aria-label="${f ? "Remove from favourites" : "Add to favourites"}" title="${f ? "In your favourites" : "Add to favourites"}">${iconStar}</button>` : ""}</div>`; }).join("");
+  }
+  function wireDvarSources(root, d) {
+    root.addEventListener("click", (e) => {
+      const o = e.target.closest(".dt-src, .dt-open");
+      if (o) { e.preventDefault(); const x = d.src[+o.dataset.n]; if (x) openSource(x.k === "c" ? { s: x.s, c: x.c, v: x.v, cid: x.cid, i: x.i } : { s: x.s, c: x.c, v: x.v || null }); return; }
+      const fb = e.target.closest("[data-favsrc]");
+      if (fb) {
+        const x = d.src[+fb.dataset.favsrc];
+        if (x.k === "c") toggleCommFav(x.cid, x.s, x.c, x.v, x.i); else toggleFav(x.s, x.c, x.v);
+        const on = srcFav(x); fb.classList.toggle("on", on); fb.setAttribute("aria-pressed", String(on));
+        $$(".dt-src", root).forEach((a) => { const y = d.src[+a.dataset.n]; a.classList.toggle("fav", srcFav(y)); });
+      }
+    });
+  }
+  const DT_F = { q: "", sec: "", sefer: "", parsha: "", cid: "" };
+  function renderDivreiPage() {
+    leavePages(); setPicker(null);
+    document.title = "Divrei Torah — Tanach Reader";
+    const F = DT_F, app = $("#app");
+    const all = divrei.slice().sort((a, b) => (b.u || b.t) - (a.u || a.t));
+    const used = (fn) => [...new Set(all.flatMap((d) => (d.src || []).map(fn)).filter(Boolean))];
+    const sefarim = ORDER.filter((s) => used((x) => x.s).includes(s)).map((s) => [s, `${book(s).en} · ${book(s).he}`]);
+    const parshiot = INDEX.parshiot.filter((p) => all.some((d) => (d.src || []).some((x) => x.v && parshiotAt(x.s, x.c, x.v).includes(p)))).map((p) => [p.id, `${p.en} · ${p.he}`]);
+    const cids = COMMENTARIES.filter((m) => used((x) => x.cid).includes(m.id)).map((m) => [m.id, `${m.en} · ${m.he}`]);
+    const opts = (vals, allT) => `<option value="">${esc(allT)}</option>` + vals.map(([v, t]) => `<option value="${esc(v)}">${esc(t)}</option>`).join("");
+    app.innerHTML = `<div class="saved-page">
+        ${savedTabs("dt")}
+        <div class="dt-actions">
+          <a class="dt-add" href="#dvar-new">＋ Add a dvar Torah</a>
+          <button type="button" class="dt-exp">Export</button>
+          <label class="dt-imp">Import<input type="file" accept="application/json,.json" hidden></label>
+        </div>
+        <div class="sp-search"><input type="search" id="dtQ" value="${esc(F.q)}" placeholder="Search your divrei Torah…  חיפוש" autocomplete="off" spellcheck="false" aria-label="Search your divrei Torah"></div>
+        <div class="sp-filters">
+          <div class="sp-chips" data-f="sec">${[["", "All"], ...INDEX.sections.map((s) => [s.id, s.en, s.he])].map(([v, en, he]) => `<button type="button" data-v="${v}" class="${F.sec === v ? "on" : ""}">${esc(en)}${he ? ` <span class="he">${esc(he)}</span>` : ""}</button>`).join("")}</div>
+          <div class="sp-row">
+            <select data-f="sefer" aria-label="Sefer">${opts(sefarim, "Every sefer")}</select>
+            <select data-f="parsha" aria-label="Parsha">${opts(parshiot, "Every parsha")}</select>
+            <select data-f="cid" aria-label="Meforash">${opts(cids, "Every meforash")}</select>
+          </div>
+        </div>
+        <div id="dtResults"></div>
+      </div>`;
+    $$(".sp-filters select", app).forEach((s) => { s.value = F[s.dataset.f] || ""; });
+    const match = (d) => {
+      const src = d.src || [];
+      if (F.sec && !src.some((x) => book(x.s).section === F.sec)) return false;
+      if (F.sefer && !src.some((x) => x.s === F.sefer)) return false;
+      if (F.parsha && !src.some((x) => x.v && parshiotAt(x.s, x.c, x.v).some((p) => p.id === F.parsha))) return false;
+      if (F.cid && !src.some((x) => x.cid === F.cid)) return false;
+      if (F.q) { const he = heNorm(d.title + " " + d.text), en = (d.title + " " + d.text).toLowerCase();
+        for (const w of F.q.trim().split(/\s+/)) { if (/[א-ת]/.test(w) ? !he.includes(heNorm(w)) : !en.includes(w.toLowerCase())) return false; } }
+      return true;
+    };
+    const draw = () => {
+      const hits = all.filter(match), res = $("#dtResults");
+      if (!all.length) { res.innerHTML = `<p class="empty">No divrei Torah yet. Paste one in with “Add a dvar Torah” — the pesukim and meforshim it quotes are found and linked.</p>`; return; }
+      if (!hits.length) { res.innerHTML = `<p class="empty">Nothing matches.</p>`; return; }
+      res.innerHTML = `<div class="sp-count">${hits.length} of ${all.length}</div><div class="dcards">` + hits.map((d) => {
+        const keys = [...new Set((d.src || []).map(srcKey))].slice(0, 6).map((k) => d.src.find((x) => srcKey(x) === k));
+        return `<a class="dcard" href="#dvar-${d.id}">
+            <div class="dc-title" dir="auto">${esc(d.title || "Dvar Torah")}</div>
+            <div class="dc-date">${esc(dvarDate(d.u || d.t))} · ${(new Set((d.src || []).map(srcKey))).size} sources</div>
+            <div class="dc-text" dir="auto">${esc((d.text || "").slice(0, 260))}</div>
+            ${keys.length ? `<div class="dc-src">${keys.map((x) => `<span>${esc(srcLabel(x)[0])}</span>`).join("")}</div>` : ""}
+          </a>`; }).join("") + `</div>`;
+    };
+    draw();
+    let t = 0;
+    $("#dtQ").addEventListener("input", (e) => { F.q = e.target.value; clearTimeout(t); t = setTimeout(draw, 150); });
+    $$(".sp-filters select", app).forEach((sel) => sel.addEventListener("change", () => { F[sel.dataset.f] = sel.value; draw(); }));
+    $(".sp-chips", app).addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; F.sec = b.dataset.v; $$(".sp-chips button", app).forEach((x) => x.classList.toggle("on", x === b)); draw(); });
+    $(".dt-exp", app).addEventListener("click", () => {
+      const blob = new Blob([JSON.stringify({ divrei, favourites }, null, 1)], { type: "application/json" });
+      const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "tanach-divrei-torah.json"; document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    });
+    $(".dt-imp input", app).addEventListener("change", async (e) => {
+      const file = e.target.files[0]; if (!file) return;
+      try {
+        const d = JSON.parse(await file.text()); let n = 0, nf = 0;
+        for (const x of d.divrei || []) if (x && x.id && !divrei.some((y) => y.id === x.id)) { divrei.push(x); n++; }
+        for (const f of d.favourites || []) if (f && f.b && !favourites.some((g) => JSON.stringify({ ...g, t: 0 }) === JSON.stringify({ ...f, t: 0 }))) { favourites.push(f); nf++; }
+        saveDivrei(); store.set("favourites", favourites);
+        toast(`Imported ${n} divrei Torah and ${nf} favourites`); renderDivreiPage();
+      } catch { toast("That file couldn't be read"); }
+    });
+  }
+  function renderDvarPage(id) {
+    leavePages(); setPicker(null);
+    const d = divrei.find((x) => x.id === id), app = $("#app");
+    if (!d) { app.innerHTML = `<div class="saved-page">${savedTabs("dt")}<p class="empty">That dvar Torah isn't here (it may have been deleted, or saved on another device).</p></div>`; return; }
+    document.title = `${d.title || "Dvar Torah"} — Tanach Reader`;
+    app.innerHTML = `<div class="saved-page">
+        ${savedTabs("dt")}
+        <article class="dvar">
+          <div class="dvar-top"><a href="#divrei-torah" class="dvar-back">← Divrei Torah</a>
+            <span class="dvar-tools"><a href="#dvar-edit-${d.id}">Edit</a><button type="button" class="dvar-del">Delete</button></span></div>
+          <h1 dir="auto">${esc(d.title || "Dvar Torah")}</h1>
+          <div class="dvar-date">${esc(dvarDate(d.t))}${d.u && d.u !== d.t ? ` · edited ${esc(dvarDate(d.u))}` : ""}</div>
+          <div class="dvar-body">${dvarBodyHTML(d)}</div>
+          <h2 class="dvar-sh">Sources <span class="he">מקורות</span></h2>
+          <div class="dvar-srcs">${sourcesListHTML(d)}</div>
+        </article>
+      </div>`;
+    wireDvarSources($(".dvar", app), d);
+    $(".dvar-del", app).addEventListener("click", () => {
+      if (!confirmInline($(".dvar-del", app), "Delete it? Tap again")) return;
+      divrei = divrei.filter((x) => x.id !== id); saveDivrei(); toast("Dvar Torah deleted"); location.hash = "#divrei-torah";
+    });
+  }
+  /* a destructive button asks once more on itself instead of a dialog */
+  function confirmInline(btn, label) {
+    if (btn.dataset.armed) return true;
+    btn.dataset.armed = "1"; const old = btn.textContent; btn.textContent = label; btn.classList.add("armed");
+    setTimeout(() => { delete btn.dataset.armed; btn.textContent = old; btn.classList.remove("armed"); }, 3500);
+    return false;
+  }
+  function renderDvarEdit(id) {
+    leavePages(); setPicker(null);
+    const d = id ? divrei.find((x) => x.id === id) : null, app = $("#app");
+    document.title = `${d ? "Edit" : "New"} dvar Torah — Tanach Reader`;
+    app.innerHTML = `<div class="saved-page">
+        ${savedTabs("dt")}
+        <div class="dvar-edit">
+          <a href="${d ? `#dvar-${d.id}` : "#divrei-torah"}" class="dvar-back">← ${d ? "Back" : "Divrei Torah"}</a>
+          <h1>${d ? "Edit the dvar Torah" : "Add a dvar Torah"}</h1>
+          <input id="dvTitle" type="text" placeholder="Title  כותרת" value="${esc(d ? d.title : "")}" dir="auto" aria-label="Title">
+          <textarea id="dvText" placeholder="Paste the dvar Torah here — Hebrew, English or both. The pesukim and meforshim it quotes or names are found and linked." dir="auto" aria-label="The dvar Torah">${esc(d ? d.text : "")}</textarea>
+          <div class="dv-btns"><button type="button" class="dv-find">Find the sources</button><button type="button" class="dv-save" disabled>Save</button></div>
+          <div class="dv-found"></div>
+        </div>
+      </div>`;
+    let src = d ? d.src.slice() : null;
+    const ta = $("#dvText"), save = $(".dv-save"), box = $(".dv-found");
+    const showFound = () => {
+      if (!src) { box.innerHTML = ""; return; }
+      const seen = new Map(); src.forEach((x) => { const k = srcKey(x); if (!seen.has(k)) seen.set(k, x); });
+      box.innerHTML = `<h2 class="dvar-sh">Found ${seen.size} source${seen.size === 1 ? "" : "s"} <span class="he">מקורות</span></h2>
+        <p class="dv-note">Each will be a link in the text. Remove any that isn't right.</p>` +
+        [...seen.entries()].map(([k, x]) => { const [le, lh] = srcLabel(x); const q = src.filter((y) => srcKey(y) === k).map((y) => ta.value.slice(y.a, y.b));
+          return `<div class="dt-srow"><span class="dv-q" dir="auto">“${esc(q[0].slice(0, 60))}${q[0].length > 60 ? "…" : ""}”</span> → <span class="en">${esc(le)}</span> <span class="he">${esc(lh)}</span>
+            <button type="button" class="dv-rm" data-k="${esc(k)}" aria-label="Remove this link">✕</button></div>`; }).join("");
+    };
+    showFound(); save.disabled = !d;
+    const find = async () => {
+      if (!ta.value.trim()) { toast("Paste the dvar Torah first"); return; }
+      $(".dv-find").disabled = true; box.innerHTML = `<p class="dv-note">Looking for pesukim and meforshim…</p>`;
+      try { src = await findSources(ta.value); } catch (e) { src = []; }
+      $(".dv-find").disabled = false; save.disabled = false; showFound();
+    };
+    $(".dv-find").addEventListener("click", find);
+    ta.addEventListener("input", () => { src = null; showFound(); save.disabled = true; });
+    box.addEventListener("click", (e) => { const b = e.target.closest(".dv-rm"); if (!b) return; src = src.filter((x) => srcKey(x) !== b.dataset.k); showFound(); });
+    save.addEventListener("click", async () => {
+      if (!src) await find();
+      const now = Date.now(), title = $("#dvTitle").value.trim() || ta.value.trim().split("\n")[0].slice(0, 70);
+      let x;
+      if (d) { Object.assign(d, { title, text: ta.value, src, u: now }); x = d; }
+      else { x = { id: now.toString(36) + Math.random().toString(36).slice(2, 6), title, text: ta.value, src, t: now, u: now }; divrei.push(x); }
+      saveDivrei(); toast("Dvar Torah saved"); location.hash = `#dvar-${x.id}`;
+    });
+  }
+  /* a pasuk you select in Scroll that a dvar Torah of yours quotes: a link to it, under the pasuk */
+  function dtChip(row) {
+    $$(".dt-chip").forEach((x) => x.remove());
+    if (!row || !divrei.length) return;
+    const s = row.dataset.s, c = +row.dataset.c, v = +row.dataset.v;
+    const ds = dtLinksFor([`p:${s}:${c}:${v}`]); if (!ds.length) return;
+    row.insertAdjacentHTML("beforeend", `<div class="dt-chip no-copy">${ds.map((d) => `<a href="#dvar-${d.id}">${iconScrollDoc}<span>${esc(d.title || "Dvar Torah")}</span></a>`).join("")}</div>`);
+  }
+
+  /* ── Find in Scroll — the top bar's search box (or Ctrl / ⌘ F): the pesukim of this sefer (or this parsha) whose
+     Hebrew (vowels and cantillation don't matter) or English has what you type; Enter or › goes to the next ── */
+  const FIND = { hits: [], i: -1 };
+  function findIndex(st) {
+    if (st.findIdx) return st.findIdx;
+    const t = st.text, rg = st.r.view === "parsha" ? st.r.p.range : null, out = [];
+    t.he.forEach((ch, ci) => ch.forEach((h, vi) => {
+      const c = ci + 1, v = vi + 1;
+      if (rg && (c < rg[1] || (c === rg[1] && v < rg[2]) || c > rg[3] || (c === rg[3] && v > rg[4]))) return;
+      out.push({ c, v, he: heNorm(htmlToText(h)), en: htmlToText((t.en[ci] || [])[vi] || "").toLowerCase().replace(/\s+/g, " ") });
+    }));
+    return (st.findIdx = out);
+  }
+  function findRun(q) {
+    const st = readerState; if (!st || !st.text) return [];
+    const words = q.trim().split(/\s+/).filter(Boolean); if (!words.length) return [];
+    const he = heNorm(words.filter((w) => /[\u05d0-\u05ea]/.test(w)).join(" ")), en = words.filter((w) => !/[\u05d0-\u05ea]/.test(w)).join(" ").toLowerCase();
+    return findIndex(st).filter((x) => (!he || x.he.includes(he)) && (!en || x.en.includes(en)));
+  }
+  function openFind() {
+    if (!document.body.classList.contains("scroll-reader")) return;
+    const box = $("#findBox"); box.hidden = false; document.body.classList.add("finding");
+    const q = $("#findQ"); q.focus(); q.select();
+  }
+  function closeFind() {
+    const box = $("#findBox"); if (!box) return;
+    box.hidden = true; $("#findList").hidden = true; document.body.classList.remove("finding");
+    if (window.CSS && CSS.highlights) CSS.highlights.delete("find");
+  }
+  function findList(q) {
+    const list = $("#findList"), hits = FIND.hits;
+    if (!q.trim()) { list.hidden = true; $("#findN").textContent = ""; return; }
+    $("#findN").textContent = hits.length ? `${hits.length}` : "0";
+    const st = readerState, s = st.slug;
+    list.innerHTML = hits.length ? hits.slice(0, 120).map((x, k) => {
+      const t = st.text, en = htmlToText((t.en[x.c - 1] || [])[x.v - 1] || "");
+      return `<button type="button" data-k="${k}"><span class="fl-ref"><span class="he">${esc(refHe(s, x.c, x.v))}</span> <span class="en">${x.c}:${x.v}</span></span><span class="fl-he">${esc(htmlToText(heText(t.he[x.c - 1][x.v - 1])).slice(0, 90))}</span><span class="fl-en">${esc(en.slice(0, 110))}</span></button>`;
+    }).join("") + (hits.length > 120 ? `<div class="fl-more">and ${hits.length - 120} more — keep typing to narrow it</div>` : "") : `<div class="fl-more">No pasuk here has that.</div>`;
+    list.hidden = false;
+  }
+  function findGo(k) {
+    const st = readerState, x = FIND.hits[k]; if (!st || !x) return;
+    FIND.i = k; $("#findN").textContent = `${k + 1} / ${FIND.hits.length}`; $("#findList").hidden = true;
+    let row = $(`#v-${st.slug}-${x.c}-${x.v}`);
+    if (!row && win.sefer()) row = win.bring(x.c, () => $(`#v-${st.slug}-${x.c}-${x.v}`));
+    if (!row) return;
+    selectVerse(st.slug, x.c, x.v, { scroll: true });
+    if (win.sefer()) win.above();
+    win.note(); trackPosition(true);
+    row.classList.remove("flash"); void row.offsetWidth; row.classList.add("flash");
+    markFind(row, $("#findQ").value);
+  }
+  /* the words found, marked in the pasuk (Custom Highlight API; vowels and cantillation are skipped over) */
+  function markFind(row, q) {
+    if (!window.CSS || !CSS.highlights || typeof Highlight === "undefined") return;
+    const ranges = [];
+    const mark = (el, needle, heb) => {
+      if (!el || !needle) return;
+      const map = [], walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT); let str = "", n;
+      while ((n = walker.nextNode())) for (let i = 0; i < n.data.length; i++) {
+        let ch = n.data[i];
+        if (heb) { if (/[\u0591-\u05c7]/.test(ch) && ch !== "\u05be") continue; if (!/[\u05d0-\u05ea]/.test(ch)) ch = " "; }
+        else ch = ch.toLowerCase();
+        if (ch === " " && str.endsWith(" ")) continue;
+        str += ch; map.push([n, i]);
+      }
+      let at = str.indexOf(needle);
+      while (at >= 0) {
+        const r = document.createRange(), a = map[at], b = map[at + needle.length - 1];
+        r.setStart(a[0], a[1]); r.setEnd(b[0], b[1] + 1); ranges.push(r);
+        at = str.indexOf(needle, at + needle.length);
+      }
+    };
+    const words = q.trim().split(/\s+/);
+    mark($(".v-he", row), heNorm(words.filter((w) => /[\u05d0-\u05ea]/.test(w)).join(" ")), true);
+    mark($(".v-en", row), words.filter((w) => !/[\u05d0-\u05ea]/.test(w)).join(" ").toLowerCase(), false);
+    if (ranges.length) CSS.highlights.set("find", new Highlight(...ranges)); else CSS.highlights.delete("find");
+  }
+  function wireFind() {
+    let t = 0;
+    $("#findOpen").addEventListener("click", () => ($("#findBox").hidden ? openFind() : closeFind()));
+    $("#findClose").addEventListener("click", closeFind);
+    $("#findQ").addEventListener("input", (e) => { clearTimeout(t); t = setTimeout(() => { FIND.hits = findRun(e.target.value); FIND.i = -1; findList(e.target.value); }, 180); });
+    $("#findQ").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); clearTimeout(t); if (FIND.i < 0) FIND.hits = findRun(e.target.value); if (FIND.hits.length) findGo((FIND.i + (e.shiftKey ? -1 : 1) + FIND.hits.length) % FIND.hits.length); }
+      if (e.key === "Escape") { e.preventDefault(); closeFind(); }
+    });
+    $("#findList").addEventListener("click", (e) => { const b = e.target.closest("[data-k]"); if (b) findGo(+b.dataset.k); });
+    $$(".find-step").forEach((b) => b.addEventListener("click", () => { if (!FIND.hits.length) return; findGo((FIND.i + +b.dataset.d + FIND.hits.length) % FIND.hits.length); }));
+    document.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F") && document.body.classList.contains("scroll-reader")) { e.preventDefault(); openFind(); }
+    });
   }
 
   /* ───────── Home ───────── */
@@ -311,6 +995,12 @@
           <h1>תנ״ך</h1>
           <p class="sub">Torah<span class="dot">·</span>Nevi'im<span class="dot">·</span>Ketuvim</p>
           <p class="intro">The whole Tanach — Hebrew with vowels and cantillation, next to the English and Rashi. Start anywhere below.</p>
+          <div class="home-tools">
+            <a href="#favourites">${iconStar}<span>Favourites</span></a>
+            <a href="#divrei-torah">${iconScrollDoc}<span>Divrei Torah</span></a>
+            <button type="button" data-hsearch><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M16 16l4.5 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg><span>Find a sefer, parsha or pasuk</span></button>
+            <button type="button" data-hsettings><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="16" cy="7" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="10" cy="17" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/></svg><span>Settings</span></button>
+          </div>
           <a class="hero-link" href="#offline"><svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true"><path d="M10 3v9m0 0l-3.5-3.5M10 12l3.5-3.5M4 15.5h12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg> Download for offline reading · <span class="he">הורדה</span></a>
         </section>
 
@@ -319,8 +1009,10 @@
         ${last && last.s ? `<section class="section">${head("Continue reading", "המשך קריאה")}<div id="continueSlot" class="pcards one"></div></section>` : ""}
 
         <section class="section">
-          ${head("Favourites", "מועדפים")}
-          <div id="favList"></div>
+          <div class="lib-links">
+            <a class="lib-link" href="#favourites">${iconStar}<span class="en">Favourites</span><span class="he">מועדפים</span><small>${favourites.length}</small></a>
+            <a class="lib-link" href="#divrei-torah">${iconScrollDoc}<span class="en">Divrei Torah</span><span class="he">דברי תורה</span><small>${divrei.length}</small></a>
+          </div>
         </section>
 
         <section class="section">
@@ -355,6 +1047,8 @@
     renderContinue(last);
     renderSaved();
     $$("[data-book]", app).forEach((b) => b.addEventListener("click", () => openPicker(b.dataset.book)));
+    $("[data-hsearch]", app).addEventListener("click", () => $("#searchBtn").click());
+    $("[data-hsettings]", app).addEventListener("click", () => openSettings());
     window.scrollTo(0, 0);
   }
 
@@ -463,21 +1157,19 @@
   const EMPTY_FAV = `<p class="empty">No favourites yet — tap the star beside any pasuk.</p>`;
   const EMPTY_BM = `<p class="empty">No saved pesukim yet — open the reader and tap the bookmark icon beside any pasuk.</p>`;
   async function renderSaved() {
-    const favEl = $("#favList"), bmEl = $("#bmList"); if (!favEl || !bmEl) return;
-    const favs = favourites.filter((f) => INDEX.books[f.b]), bms = bookmarks.filter((b) => INDEX.books[b.b]);
-    if (!favs.length) favEl.innerHTML = EMPTY_FAV;
-    if (!bms.length) bmEl.innerHTML = EMPTY_BM;
-    if (!favs.length && !bms.length) return;
+    const bmEl = $("#bmList"); if (!bmEl) return;
+    const favEl = document.createElement("div"), favs = [];          // favourites have a page of their own now
+    const bms = bookmarks.filter((b) => INDEX.books[b.b] && !b.cid);
+    if (!bms.length) { bmEl.innerHTML = EMPTY_BM; return; }
     const texts = {}, comms = {};
     await Promise.all([...new Set([...favs, ...bms].map((b) => b.b))].map((sl) => loadText(sl).then((t) => (texts[sl] = t)).catch(() => {})));
     await Promise.all(bms.filter((bm) => bm.cid && commMeta(bm.cid)).map(async (bm) => {
       const k = `${bm.cid}:${bm.b}`; if (comms[k]) return; comms[k] = null;
       try { comms[k] = { he: await loadComm(bm.cid, bm.b), en: commMeta(bm.cid).enDir ? await loadCommEn(bm.cid, bm.b).catch(() => null) : null }; } catch {}
     }));
-    if (!favEl.isConnected) return;
-    favEl.innerHTML = favs.length ? savedGroups("fav", favs, texts, comms) || EMPTY_FAV : EMPTY_FAV;
+    if (!bmEl.isConnected) return;
     bmEl.innerHTML = bms.length ? savedGroups("bm", bms, texts, comms) || EMPTY_BM : EMPTY_BM;
-    for (const el of [favEl, bmEl]) {
+    for (const el of [bmEl]) {
       wireCards(el);
       el.onclick = (e) => {
         const b = e.target.closest("[data-rm], [data-rmc], [data-rmf], [data-more]"); if (!b) return;
@@ -528,8 +1220,8 @@
   }
 
   /* ───────── Favourites (a star on each pasuk) ───────── */
-  const isFav = (s, c, v) => favourites.some((f) => f.b === s && f.c === c && f.v === v);
-  function removeFav(s, c, v) { favourites = favourites.filter((f) => !(f.b === s && f.c === c && f.v === v)); store.set("favourites", favourites); }
+  const isFav = (s, c, v) => favourites.some((f) => !f.cid && f.b === s && f.c === c && f.v === v);
+  function removeFav(s, c, v) { favourites = favourites.filter((f) => f.cid || !(f.b === s && f.c === c && f.v === v)); store.set("favourites", favourites); }
   function toggleFav(s, c, v) {
     if (isFav(s, c, v)) { removeFav(s, c, v); syncMarks(s, c, v); toast("Removed from favourites"); return; }
     favourites.push({ b: s, c, v, t: Date.now() });
@@ -675,6 +1367,9 @@
     if (readerState === null || readerState.r !== r) return;
     document.title = `${b.en} — Tanach Reader`;
     PG = { slug, text, comms, intros, items: [], idx: 0, page: 0, pages: 1, phr: [], active: null, firstPasuk: 0 };
+    const wantIntro = pendingPgIntro && pendingPgIntro.s === slug ? pendingPgIntro : null; pendingPgIntro = null;
+    if (wantIntro && !r.pgIntro) r.pgIntro = { key: wantIntro.key, parsha: wantIntro.parsha };
+    PG.wantAnchor = wantIntro ? wantIntro.anchor : null;
     buildPagerItems();
     const items = PG.items;
     let idx;
@@ -684,6 +1379,7 @@
       if (idx < 0) idx = items.findIndex((it) => it.type === "haft" && it.pid === r.pgHaft);
     } else if (r.pgParsha) {
       idx = items.findIndex((it) => it.type === "intro" && it.parsha === r.pgParsha);
+      if (idx < 0 && r.c === 1 && r.v === 1) idx = 0;               // the sefer's first parsha: the sefer's introductions
       if (idx < 0) idx = items.findIndex((it) => it.type === "pasuk" && it.c === r.c && it.v === r.v);
     } else if (r.pgIntro) {
       idx = items.findIndex((it) => it.type === "intro" && it.key === r.pgIntro.key);
@@ -696,6 +1392,7 @@
     PG.idx = Math.max(0, idx);
     setPicker(r);
     app.textContent = "";
+    document.body.classList.remove("scroll-reader"); closeFind();
     document.body.classList.add("pages-mode");
     app.innerHTML = `
       <div class="pager" id="pager">
@@ -719,6 +1416,7 @@
     wirePager();
     pagerShow(PG.idx, 0);
     showPendingComment();
+    if (PG.wantAnchor) { const el = $(`#pgStage .pg-para[data-anchor="${PG.wantAnchor}"] .ph`); PG.wantAnchor = null; if (el) showPhrase(+el.dataset.p); }
     preloadForCopy();
   }
 
@@ -936,10 +1634,13 @@
     if (i == null) { src.textContent = ""; en.innerHTML = `<span class="pg-hint">Tap any phrase to see its translation here</span>`; return; }
     const el = $(`#pgStage .ph[data-p="${i}"]`); if (el) el.classList.add("on");
     const ph = PG.phr[i];
-    const cu = el && el.closest(".pg-c");
+    const cu = el && el.closest(".pg-c"), para = !cu && el && el.closest(".pg-para");
     if (cu) {
-      const d = cu.dataset, on = isCommBm(d.cid, d.s, +d.c, +d.v, +d.i);
-      src.innerHTML = `${esc(ph.src)} <button type="button" class="tx-bm ${on ? "on" : ""}" data-cbm="${d.cid}:${d.s}:${d.c}:${d.v}:${d.i}" aria-label="Bookmark this comment" title="Bookmark this comment">${iconBookmark}<span>${on ? "Saved" : "Save"}</span></button>`;
+      const d = cu.dataset, on = isCommFav(d.cid, d.s, +d.c, +d.v, +d.i);
+      src.innerHTML = `${esc(ph.src)} <button type="button" class="tx-bm tx-fav ${on ? "on" : ""}" data-cf="${d.cid}:${d.s}:${d.c}:${d.v}:${d.i}" aria-pressed="${on}" title="Add this comment to your favourites">${iconStar}<span>${on ? "Favourite" : "Add to favourites"}</span></button>`;
+    } else if (para) {
+      const [, cid, key, p] = para.dataset.anchor.split(":"), on = isIntroFav(cid, PG.slug, key, +p);
+      src.innerHTML = `${esc(ph.src)} <button type="button" class="tx-bm tx-fav ${on ? "on" : ""}" data-if="${cid}:${PG.slug}:${key}:${p}" aria-pressed="${on}" title="Add this paragraph to your favourites">${iconStar}<span>${on ? "Favourite" : "Add to favourites"}</span></button>`;
     } else src.textContent = ph.src;
     if (ph.html) en.innerHTML = ph.html; else en.textContent = ph.en || "—";
     if (el && el.closest("#pgFlow")) { const pg = pageOf(el); if (pg !== PG.page) { PG.page = pg; pagerMove(); } }
@@ -961,10 +1662,9 @@
     $$(".pg-btn", pager).forEach((b) => b.addEventListener("click", () => pagerStep(+b.dataset.go)));
     $$(".pg-step", pager).forEach((b) => b.addEventListener("click", () => phraseStep(+b.dataset.step)));
     $("#pgTrans").addEventListener("click", (e) => {
-      const b = e.target.closest(".tx-bm"); if (!b) return;
-      const [cid, s, c, v, i] = b.dataset.cbm.split(":");
-      toggleCommBm(cid, s, +c, +v, +i, b);
-      const sp = $("span", b); if (sp) sp.textContent = b.classList.contains("on") ? "Saved" : "Save";
+      const b = e.target.closest(".tx-fav"); if (!b) return;
+      if (b.dataset.cf) { const [cid, s, c, v, i] = b.dataset.cf.split(":"); toggleCommFav(cid, s, +c, +v, +i); }
+      else { const [cid, s, key, p] = b.dataset.if.split(":"); const it = PG.items[PG.idx]; toggleIntroFav(cid, s, key, +p, it && it.c, it && it.v); }
     });
     $("#pgStage").addEventListener("click", (e) => {
       if (PG.swiped) return;
@@ -1127,6 +1827,7 @@
         </article>
       </div>`;
     renderReaderTools();
+    document.body.classList.add("scroll-reader");
     const verses = $(".verses", app);
     afterInsert([verses]);                 // aliyah headings, the haftarah and Rashi go in with the text, before it is seen
     preloadHaftarot();
@@ -1190,6 +1891,7 @@
     const a = pendingAnchor; pendingAnchor = null;
     const c0 = a && a.s === slug && a.c >= 1 && a.c <= n ? a.c : Math.min(Math.max(1, r.c || 1), n);
     st.win = true;
+    document.body.classList.add("scroll-reader");
     win.rebuildAt(c0);
     win.watch(body);
     // What will be on the screen is drawn (with what's below it), the page is put in its place, then the perakim
@@ -2043,7 +2745,7 @@
       rows.map((rw, k) => `<div class="rline"><div class="r-en cu-en">${ens[k]}</div><div class="r-he cu-he">${rw.he.map(esc).join("<br>")}</div></div>`).join("");
   }
 
-  const commBmBtn = (cid, s, c, v, i) => `<button class="c-bm ${isCommBm(cid, s, c, v, i) ? "on" : ""}" type="button" aria-label="Bookmark this ${esc(commMeta(cid).en)}" title="Bookmark this comment">${iconBookmark}</button>`;
+  const commBmBtn = (cid, s, c, v, i) => { const on = isCommFav(cid, s, c, v, i); return `<button class="c-bm c-fav ${on ? "on" : ""}" type="button" aria-pressed="${on}" aria-label="Favourite this ${esc(commMeta(cid).en)}" title="Add this comment to your favourites">${iconStar}</button>`; };
   function commentRow(cid, s, c, v, i, he, en) {
     const showEn = settings.rashiEn && en;
     if (showEn && settings.rashiLines) {
@@ -2156,7 +2858,8 @@
     const fv = e.target.closest(".fav-btn");
     if (fv) { e.stopPropagation(); toggleFav(s, c, v); return; }
     const cbm = e.target.closest(".c-bm");
-    if (cbm) { e.stopPropagation(); const cr = cbm.closest(".rrow"); toggleCommBm(cr.dataset.cid, cr.dataset.s, +cr.dataset.c, +cr.dataset.v, +cr.dataset.i, cbm); return; }
+    if (cbm) { e.stopPropagation(); const cr = cbm.closest(".rrow"); toggleCommFav(cr.dataset.cid, cr.dataset.s, +cr.dataset.c, +cr.dataset.v, +cr.dataset.i); return; }
+    if (e.target.closest(".dt-chip")) return;                      // a link to a dvar Torah
     if (e.target.closest(".rashi-pill")) { toggleRashi(row); markSelected(s, c, v); return; }
     if (e.target.closest(".rdrop")) return;                        // reading / selecting inside Rashi
     if (window.getSelection && String(window.getSelection()).length > 1) return; // selecting text
@@ -2168,6 +2871,7 @@
   }
   function clearSelected() {
     $$(".verse.selected").forEach((x) => x.classList.remove("selected"));
+    dtChip(null);
     const st = readerState; if (!st) return;
     const was = st.sel; st.sel = null;
     if (was && st.r.view === "chapter") history.replaceState(null, "", chapterHash(st.slug, was.c));
@@ -2177,6 +2881,7 @@
     $$(".verse.selected").forEach((x) => x.classList.remove("selected"));
     const row = $(`#v-${s}-${c}-${v}`); if (!row) return null;
     row.classList.add("selected");
+    dtChip(row);
     if (readerState) readerState.sel = { s, c, v };
     if (readerState && readerState.r.view === "chapter") history.replaceState(null, "", chapterHash(s, c, v));
     return row;
@@ -2787,6 +3492,14 @@
     if (settings.view === "pages") {
       // Scroll → Pages: open on the pasuk at the top of the screen (or its haftarah page)
       // (on the haftarah: its page for the same haftarah pasuk)
+      // — or, when the top of the screen is above the first pasuk (the sefer's or the parsha's title is showing),
+      // at the beginning of the introductions
+      const rp = readerState.r.view === "parsha" ? readerState.r.p : null;
+      const first = rp ? $(`#v-${slug}-${rp.range[1]}-${rp.range[2]}`) : $(`#v-${slug}-1-1`);
+      if (!readerState.sel && first && first.getBoundingClientRect().top >= topLine() - 2) {
+        current = rp ? { view: "chapter", slug, c: rp.range[1], v: rp.range[2], pgParsha: rp.id } : { view: "chapter", slug, c: 1, v: null };
+        suppressOpen = true; return renderReader(current);
+      }
       if (pos.haft && pos.pid) {
         const p = INDEX.parshiot.find((x) => x.id === pos.pid);
         current = { view: "chapter", slug, c: p.range[3], v: null, pgHaft: pos.pid, pgHaftAt: pos.at || { s: pos.s, c: pos.c, v: pos.v } };
@@ -3012,6 +3725,7 @@
     $("#pickerBack").addEventListener("click", showBooks);
     $("#searchBtn").addEventListener("click", () => { openDialog("#searchOverlay"); $("#searchInput").value = ""; renderSearch(); setTimeout(() => $("#searchInput").focus(), 30); });
     $("#settingsBtn").addEventListener("click", () => openSettings());
+    wireFind();
     $("#copyModeBtn").addEventListener("click", () => setCopyMode(!copyMode));
     $("#layoutBtn").addEventListener("click", () => {
       settings.view = settings.view === "pages" ? "scroll" : "pages"; saveSettings();
@@ -3093,9 +3807,9 @@
   }
   /* what can be downloaded for a sefer */
   const DL_KINDS = () => [
-    { id: "text", en: "Tanach text", sub: "Hebrew + English", he: "מקרא", files: (s) => [`data/text/${s}.json`] },
+    { id: "text", en: "Tanach text", sub: "Hebrew + English", he: "מקרא", files: (s) => [`data/text/${s}.json`, "data/search/he.json"] },
     ...COMMENTARIES.map((c) => ({ id: c.id, en: c.en, sub: c.note ? `with English · ${c.note} only` : "with English", he: c.he,
-      files: (s) => avail(c, s) ? [c.dir + s + ".json", c.enDir && c.enDir + s + ".json", c.introDir && INDEX.intros && (INDEX.intros[c.id] || []).includes(s) && c.introDir + s + ".json"].filter(Boolean) : [] })),
+      files: (s) => avail(c, s) ? [c.dir + s + ".json", c.enDir && c.enDir + s + ".json", c.introDir && INDEX.intros && (INDEX.intros[c.id] || []).includes(s) && c.introDir + s + ".json", hasAlign(c.id, s) && alignUrl(c.id, s)].filter(Boolean) : [] })),
   ];
   const filesFor = (slugs, kinds) => {
     const man = OFF.man ? OFF.man.files : {}, out = new Set();
@@ -3274,7 +3988,7 @@
     }
   }
   // for checking the phrase matching from tests (no effect on the page)
-  window.__tanachDebug = { commParts, commUnits, splitPhrases, alignPhrases, alignComment, sentencesOf, extractDH, heComm, boldSeq, unB, loadLex, lexMatrix, setLexW: (w) => { LEX_W = w; } };
+  window.__tanachDebug = { findSources, commParts, commUnits, splitPhrases, alignPhrases, alignComment, sentencesOf, extractDH, heComm, boldSeq, unB, loadLex, lexMatrix, setLexW: (w) => { LEX_W = w; } };
   async function boot() {
     applySettings();
     wireChrome();
