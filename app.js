@@ -2909,12 +2909,18 @@
     return { dh, rest: norm(t.content.textContent) };
   }
   function splitPhrases(text, lang) {
-    const out = []; let depth = 0, start = 0;
+    // brackets keep what is inside them together — when they close within 150 characters; an unclosed bracket, or a
+    // translator's long note in brackets, is cut like the rest of the text
+    const inside = new Uint8Array(text.length), opens = [];
     for (let i = 0; i < text.length; i++) {
       const ch = text[i];
-      if (ch === "(" || ch === "[") depth++;
-      else if ((ch === ")" || ch === "]") && depth > 0) depth--;
-      else if (depth === 0 && /[,.:;?!]/.test(ch)) {
+      if (ch === "(" || ch === "[") opens.push(i);
+      else if ((ch === ")" || ch === "]") && opens.length) { const o = opens.pop(); if (i - o <= 150) inside.fill(1, o, i + 1); }
+    }
+    const out = []; let start = 0;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (!inside[i] && /[,.:;?!]/.test(ch)) {
         let j = i + 1; while (j < text.length && /[\]\)"”’'״\uE001]/.test(text[j])) j++;
         if (j >= text.length || !/\s/.test(text[j])) continue;
         if (lang === "en") {
