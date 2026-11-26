@@ -146,7 +146,12 @@
   const commEnUrl = (cid, slug) => commMeta(cid).enDir + slug + ".json";
   const loadText = (slug) => fetchJSON(textUrl(slug));
   const loadComm = (cid, slug) => fetchJSON(commUrl(cid, slug));
-  const loadCommEn = (cid, slug) => fetchJSON(commEnUrl(cid, slug));
+  /* each phrase of a commentary matched to its English ahead of time (scripts/align — word links learned from all the
+     translations, checked against comments aligned by hand); loaded with the English */
+  const alignUrl = (cid, slug) => `data/align/${cid}/${slug}.json`;
+  const hasAlign = (cid, slug) => !!(INDEX.align && (INDEX.align[cid] || []).includes(slug));
+  const loadCommEn = (cid, slug) => Promise.all([fetchJSON(commEnUrl(cid, slug)), hasAlign(cid, slug) ? fetchJSON(alignUrl(cid, slug)).catch(() => null) : null]).then(([en]) => en);
+  const alignOf = (cid, s, c, v, i) => { const d = cid && resolved.get(alignUrl(cid, s)); return (d && d[`${c}:${v}:${i}`]) || null; };
   const at = (data, c, v) => (data && data[c - 1] && data[c - 1][v - 1]) || [];
 
   const book = (slug) => INDEX.books[slug];
@@ -595,17 +600,66 @@
       return `<span class="ph" data-p="${i}">${esc(heText(rw.he.join(" ")))}</span>`;
     }).join(" ");
   }
-  function phrasedComment(heHtml, enHtml, reg, src) {
+  /* a comment as the phrases Pages shows: its dibbur hamatchil (if any), then each highlight with its English */
+  /* a comment cut into what is matched: the Hebrew dibbur hamatchil and the rest, the English ones likewise */
+  function commParts(heHtml, enHtml) {
     const H = extractDH(heComm(heHtml)), E = extractDH(enHtml || "", true);
     let enRest = E.rest, enDH = E.dh;
     if (!enDH) { const m = enRest.match(/^([^a-z\uE000\uE001]{3,}?[.:])\s+(?=\S)/); if (m && /[A-Z]{2}/.test(m[1])) { enDH = m[1]; enRest = enRest.slice(m[0].length); } }  // capitals, if any are left
     if (!H.dh && enDH) { enRest = `${B0}${enDH}${B1} ${enRest}`; enDH = ""; }
-    const rows = alignComment(H.rest, enRest);
+    return { heDH: H.dh, heRest: H.rest, enDH, enRest };
+  }
+  /* the English of a comment word by word, with its bold (the English dibbur hamatchil is bold throughout) */
+  function enWords(eu, edh) {
+    let on = false;
+    return eu.map((e, j) => e.split(" ").filter(Boolean).map((tok) => {
+      let b = false;
+      for (const ch of tok) { if (ch === B0) on = true; else if (ch === B1) on = false; else if (on) b = true; }
+      return { t: unB(tok), b: b || (edh && j === 0) };
+    }));
+  }
+  const boldWords = (ws) => { let h = "", on = false; ws.forEach((w, i) => { if (w.b && !on) { h += "<b>"; on = true; } if (!w.b && on) { h += "</b>"; on = false; } h += (i ? " " : "") + esc(w.t); }); return (on ? h + "</b>" : h).replace(/ <\/b>/g, "</b> "); };
+  /* the matches made ahead of time for this comment, as highlights: each a run of Hebrew phrases and the English
+     pieces that translate them (in the Hebrew's order — the English may come from anywhere in the translation;
+     pieces that don't stand together in it are joined with " … ") */
+  function unitsFromAlign(al, heDH, heRest, enDH, enRest) {
+    const hu = (heDH ? [heDH] : []).concat(splitPhrases(heRest, "he"));
+    const eu = (enDH ? [enDH] : []).concat(splitPhrases(enRest, "en"));
+    if (al[0] !== hu.length || al[1] !== eu.length) return null;      // not cut the same way: match it here instead
+    const W = enWords(eu, !!enDH);
+    const out = []; let k = 0;
+    for (const [size, pieces] of al[2]) {
+      const he = hu.slice(k, k + size), dhIn = !!heDH && k === 0;
+      let en = "", html = "", prev = null;
+      for (const p of pieces) {
+        const [j, a, b0] = typeof p === "number" ? [p, 0, -1] : p, ws = W[j] || [], b = b0 < 0 ? ws.length : b0;
+        const w = ws.slice(a, b); if (!w.length) continue;
+        const joined = prev && ((prev[0] === j && prev[1] === a) || (prev[0] + 1 === j && prev[1] === (W[prev[0]] || []).length && a === 0));
+        const sep = prev ? (joined ? " " : " … ") : "";
+        en += sep + w.map((x) => x.t).join(" "); html += sep + boldWords(w); prev = [j, b];
+      }
+      out.push(dhIn && size === 1 ? { dh: true, he: heDH, en, html }
+        : { he: (dhIn ? he.slice(1) : he).join(" "), heDH: dhIn ? heDH : "", en, html });
+      k += size;
+    }
+    return out;
+  }
+  function commUnits(heHtml, enHtml, al) {
+    const { heDH, heRest, enDH, enRest } = commParts(heHtml, enHtml), H = { dh: heDH };
+    if (al && enHtml) { const u = unitsFromAlign(al, heDH, heRest, enDH, enRest); if (u) return u; }
+    const rows = alignComment(heRest, enRest);
     const ens = boldSeq(rows.map((rw) => rw.en.join(" ")));
-    let html = "";
-    if (H.dh) { const i = reg.push({ en: enDH, html: enDH ? `<b>${esc(enDH)}</b>` : "", src }) - 1; html += `<b class="ph dh" data-p="${i}">${esc(H.dh)}</b> `; }
-    rows.forEach((rw, k) => { const i = reg.push({ en: unB(rw.en.join(" ")), html: ens[k], src }) - 1; html += `<span class="ph" data-p="${i}">${esc(rw.he.join(" "))}</span> `; });
-    return html;
+    const out = [];
+    if (H.dh) out.push({ dh: true, he: H.dh, en: enDH, html: enDH ? `<b>${esc(enDH)}</b>` : "" });
+    rows.forEach((rw, k) => out.push({ he: rw.he.join(" "), en: unB(rw.en.join(" ")), html: ens[k] }));
+    return out;
+  }
+  function phrasedComment(heHtml, enHtml, reg, src, al) {
+    return commUnits(heHtml, enHtml, al).map((u) => {
+      const i = reg.push({ en: u.en, html: u.html, src }) - 1;
+      return u.dh ? `<b class="ph dh" data-p="${i}">${esc(u.he)}</b> `
+        : `<span class="ph" data-p="${i}">${u.heDH ? `<b class="dh">${esc(u.heDH)}</b> ` : ""}${esc(u.he)}</span> `;
+    }).join("");
   }
 
   async function renderPages(r, text) {
@@ -766,7 +820,7 @@
       const list = at(resolved.get(commUrl(cm.id, s)), c, v); if (!list.length) continue;
       const enl = at(resolved.get(commEnUrl(cm.id, s)), c, v);
       body += `<h3 class="pg-cname"><span class="he">${cm.he}</span><span class="en">${esc(cm.en)}</span></h3>
-        ${list.map((x, i) => `<div class="pg-c cu" data-anchor="c:${cm.id}:${i}" data-kind="comm" data-cid="${cm.id}" data-s="${s}" data-c="${c}" data-v="${v}" data-i="${i}"><div class="cu-he">${phrasedComment(x, enl[i] || "", reg, cm.enSrc ? `${cm.en} · ${cm.enSrc}` : cm.en)}</div></div>`).join("")}`;
+        ${list.map((x, i) => `<div class="pg-c cu" data-anchor="c:${cm.id}:${i}" data-kind="comm" data-cid="${cm.id}" data-s="${s}" data-c="${c}" data-v="${v}" data-i="${i}"><div class="cu-he">${phrasedComment(x, enl[i] || "", reg, cm.enSrc ? `${cm.en} · ${cm.enSrc}` : cm.en, alignOf(cm.id, s, c, v, i))}</div></div>`).join("")}`;
     }
     return body || `<p class="pg-none">אין פירוש על פסוק זה</p>`;
   }
@@ -1973,7 +2027,13 @@
     }
     return rows;
   }
-  function linesHTML(heHtml, enHtml) {
+  function linesHTML(heHtml, enHtml, al) {
+    if (al) {
+      const p = commParts(heHtml, enHtml), u = unitsFromAlign(al, p.heDH, p.heRest, p.enDH, p.enRest);
+      if (u) return u.map((x) => x.dh
+        ? `<div class="rline dh"><div class="r-en cu-en">${x.html}</div><div class="r-he cu-he dh-line"><b>${esc(x.he)}</b></div></div>`
+        : `<div class="rline"><div class="r-en cu-en">${x.html}</div><div class="r-he cu-he">${x.heDH ? `<b>${esc(x.heDH)}</b> ` : ""}${esc(x.he)}</div></div>`).join("");
+    }
     const H = extractDH(heComm(heHtml)), E = extractDH(enHtml, true);
     let enRest = E.rest, enDH = E.dh;
     if (!H.dh && enDH) { enRest = `${B0}${enDH}${B1} ${enRest}`.trim(); enDH = ""; }
@@ -1990,7 +2050,7 @@
       return `<div class="rrow lines cu has-en" data-kind="comm" data-cid="${cid}" data-s="${s}" data-c="${c}" data-v="${v}" data-i="${i}">
         <button class="unit-copy c-copy" type="button" aria-label="Copy this comment" title="Copy this comment">${iconCopy}</button>
         ${commBmBtn(cid, s, c, v, i)}
-        ${linesHTML(he, en)}
+        ${linesHTML(he, en, alignOf(cid, s, c, v, i))}
       </div>`;
     }
     return `<div class="rrow cu ${showEn ? "has-en" : "no-en"}" data-kind="comm" data-cid="${cid}" data-s="${s}" data-c="${c}" data-v="${v}" data-i="${i}">
@@ -3214,7 +3274,7 @@
     }
   }
   // for checking the phrase matching from tests (no effect on the page)
-  window.__tanachDebug = { splitPhrases, alignPhrases, alignComment, sentencesOf, extractDH, heComm, boldSeq, unB, loadLex, lexMatrix, setLexW: (w) => { LEX_W = w; } };
+  window.__tanachDebug = { commParts, commUnits, splitPhrases, alignPhrases, alignComment, sentencesOf, extractDH, heComm, boldSeq, unB, loadLex, lexMatrix, setLexW: (w) => { LEX_W = w; } };
   async function boot() {
     applySettings();
     wireChrome();
