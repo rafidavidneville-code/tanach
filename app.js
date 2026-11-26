@@ -367,8 +367,19 @@
   let pendingPgIntro = null;
 
   /* ── favourites as things to show and search ── */
-  async function favRecords() {
-    const list = favourites.filter((f) => INDEX.books[f.b] && (!f.cid || commMeta(f.cid)));
+  async function favRecords() { return recordsFor(favourites.filter((f) => INDEX.books[f.b] && (!f.cid || commMeta(f.cid)))); }
+  /* the pesukim and comments the divrei Torah quote that aren't favourites (shown on the favourites page on request) */
+  function dvSrcRecords() {
+    divreiReady();
+    const seen = new Set(), list = [];
+    for (const d of divrei) for (const x of d.src || []) {
+      if (!x.v || !INDEX.books[x.s] || (x.k === "c" && !commMeta(x.cid))) continue;
+      const k = srcKey(x); if (seen.has(k) || srcFav(x)) continue; seen.add(k);
+      list.push(x.k === "c" ? { b: x.s, c: x.c, v: x.v, cid: x.cid, i: x.i } : { b: x.s, c: x.c, v: x.v });
+    }
+    return recordsFor(list).then((rs) => rs.map((r) => Object.assign(r, { notFav: true })));
+  }
+  async function recordsFor(list) {
     const jobs = [];
     for (const f of list) {
       if (!f.cid) jobs.push(loadText(f.b));
@@ -395,7 +406,7 @@
     const he = hd ? at(hd, f.c, f.v)[f.i] : null; if (!he) return null;
     return fin(heComm(he), ed ? at(ed, f.c, f.v)[f.i] || "" : "", { dh: heNorm(extractDH(he).dh), parsha: parshiotAt(f.b, f.c, f.v).map((p) => p.id), key: `c:${f.cid}:${f.b}:${f.c}:${f.v}:${f.i}` });
   }
-  const FAV_F = { q: "", sec: "", kind: "", sefer: "", parsha: "", cid: "", c: "", v: "", dh: "" };
+  const FAV_F = { q: "", sec: "", kind: "", sefer: "", parsha: "", cid: "", c: "", v: "", dh: "", dvt: "" };
   const numOf = (x) => { x = (x || "").trim(); if (!x) return null; return /^\d+$/.test(x) ? +x : parseGematria(x) || null; };
   function favMatches(r, F) {
     if (F.sec && r.sec !== F.sec) return false;
@@ -432,12 +443,14 @@
     const ids = new Set(); for (const k of keys) for (const id of dtIndex().get(k) || []) ids.add(id);
     return [...ids].map((id) => divrei.find((d) => d.id === id)).filter(Boolean);
   }
+  const recDts = (r) => r.kind === "intro" ? [] : dtLinksFor(r.kind === "comm" ? [r.key, `p:${r.s}:${r.c}:${r.v}`] : [r.key]);
   function recCard(r) {
     const [le, lh] = recLabel(r), [re, rh] = recRef(r);
-    const dts = dtLinksFor(r.kind === "comm" ? [r.key, `p:${r.s}:${r.c}:${r.v}`] : [r.key]);
-    return `<div class="fcard" data-key="${esc(r.key)}" tabindex="0" role="link">
+    const dts = recDts(r);
+    return `<div class="fcard${r.notFav ? " not-fav" : ""}" data-key="${esc(r.key)}" tabindex="0" role="link">
         <div class="fc-top"><span class="fc-kind">${esc(le)} · <span class="he">${esc(lh)}</span></span>
-          <button type="button" class="fc-star on" data-unfav="${esc(r.key)}" aria-label="Remove from favourites" title="Remove from favourites">${iconStar}</button></div>
+          ${r.notFav ? `<button type="button" class="fc-star" data-addfav="${esc(r.key)}" aria-label="Add to favourites" title="Not in your favourites — add it">${iconStar}</button>`
+            : `<button type="button" class="fc-star on" data-unfav="${esc(r.key)}" aria-label="Remove from favourites" title="Remove from favourites">${iconStar}</button>`}</div>
         <div class="fc-ref"><span class="en">${esc(re)}</span><span class="he">${esc(rh)}</span></div>
         <div class="fc-he">${r.heHtml}</div>
         ${r.enHtml ? `<div class="fc-en">${r.enHtml}</div>` : ""}
@@ -455,13 +468,15 @@
     document.title = "Favourites — Tanach Reader";
     const app = $("#app");
     app.innerHTML = `<div class="saved-page">${savedTabs("fav")}<div class="loading" style="padding:30px 0">טוען…</div></div>`;
-    const recs = await favRecords();
+    const [recs, extra] = await Promise.all([favRecords(), dvSrcRecords()]);
     if (current.view !== "favourites") return;
     const F = FAV_F;
+    const pool = () => (F.dvt === "src" ? extra : recs);
     const opts = (vals, all) => `<option value="">${esc(all)}</option>` + vals.map(([v, t]) => `<option value="${esc(v)}">${esc(t)}</option>`).join("");
-    const sefarim = ORDER.filter((s) => recs.some((r) => r.s === s)).map((s) => [s, `${book(s).en} · ${book(s).he}`]);
-    const parshiot = INDEX.parshiot.filter((p) => recs.some((r) => r.parsha.includes(p.id))).map((p) => [p.id, `${p.en} · ${p.he}`]);
-    const cids = COMMENTARIES.filter((m) => recs.some((r) => r.cid === m.id)).map((m) => [m.id, `${m.en} · ${m.he}`]);
+    const both = recs.concat(extra);
+    const sefarim = ORDER.filter((s) => both.some((r) => r.s === s)).map((s) => [s, `${book(s).en} · ${book(s).he}`]);
+    const parshiot = INDEX.parshiot.filter((p) => both.some((r) => r.parsha.includes(p.id))).map((p) => [p.id, `${p.en} · ${p.he}`]);
+    const cids = COMMENTARIES.filter((m) => both.some((r) => r.cid === m.id)).map((m) => [m.id, `${m.en} · ${m.he}`]);
     const chips = (name, list) => `<div class="sp-chips" data-f="${name}">${list.map(([v, en, he]) => `<button type="button" data-v="${v}" class="${F[name] === v ? "on" : ""}">${esc(en)}${he ? ` <span class="he">${esc(he)}</span>` : ""}</button>`).join("")}</div>`;
     app.innerHTML = `<div class="saved-page">
         ${savedTabs("fav")}
@@ -469,6 +484,7 @@
         <div class="sp-filters">
           ${chips("sec", [["", "All"], ...INDEX.sections.map((s) => [s.id, s.en, s.he])])}
           ${chips("kind", [["", "Everything"], ["pasuk", "Pesukim", "פסוקים"], ["comm", "Meforshim", "מפרשים"], ["intro", "Introductions", "הקדמות"]])}
+          ${chips("dvt", [["", "All favourites"], ["in", "In a dvar Torah", "בדבר תורה"], ["out", "Not in a dvar Torah"], ["src", `Dvar Torah sources not in favourites${extra.length ? ` (${extra.length})` : ""}`]])}
           <div class="sp-row">
             <select data-f="sefer" aria-label="Sefer">${opts(sefarim, "Every sefer")}</select>
             <select data-f="parsha" aria-label="Parsha">${opts(parshiot, "Every parsha")}</select>
@@ -485,11 +501,12 @@
       </div>`;
     $$(".sp-filters select", app).forEach((s) => { s.value = F[s.dataset.f] || ""; });
     const draw = () => {
-      const hits = recs.filter((r) => favMatches(r, F)).sort((a, b) => ORDER.indexOf(a.s) - ORDER.indexOf(b.s) || a.c - b.c || a.v - b.v || (a.kind === "pasuk" ? -1 : 1) - (b.kind === "pasuk" ? -1 : 1) || COMMENTARIES.findIndex((m) => m.id === a.cid) - COMMENTARIES.findIndex((m) => m.id === b.cid) || (a.i || 0) - (b.i || 0));
+      const hits = pool().filter((r) => favMatches(r, F) && (F.dvt === "in" ? recDts(r).length > 0 : F.dvt === "out" ? recDts(r).length === 0 : true)).sort((a, b) => ORDER.indexOf(a.s) - ORDER.indexOf(b.s) || a.c - b.c || a.v - b.v || (a.kind === "pasuk" ? -1 : 1) - (b.kind === "pasuk" ? -1 : 1) || COMMENTARIES.findIndex((m) => m.id === a.cid) - COMMENTARIES.findIndex((m) => m.id === b.cid) || (a.i || 0) - (b.i || 0));
       const res = $("#spResults");
-      if (!recs.length) { res.innerHTML = `<p class="empty">No favourites yet — tap the ☆ beside any pasuk, or on any comment of a meforash.</p>`; return; }
+      if (F.dvt === "src" && !extra.length) { res.innerHTML = `<p class="empty">${divrei.length ? "Every pasuk and comment your divrei Torah quote is already in your favourites." : "No divrei Torah yet."}</p>`; return; }
+      if (!pool().length) { res.innerHTML = `<p class="empty">No favourites yet — tap the ☆ beside any pasuk, or on any comment of a meforash.</p>`; return; }
       if (!hits.length) { res.innerHTML = `<p class="empty">Nothing matches.</p>`; return; }
-      res.innerHTML = `<div class="sp-count">${hits.length} of ${recs.length}</div>` + INDEX.sections.map((sec) => {
+      res.innerHTML = `<div class="sp-count">${hits.length} of ${pool().length}${F.dvt === "src" ? " · quoted in your divrei Torah, not in your favourites" : ""}</div>` + INDEX.sections.map((sec) => {
         const g = hits.filter((r) => r.sec === sec.id); if (!g.length) return "";
         return `<div class="saved-group"><div class="group-label saved-label"><span class="en">${esc(sec.en)}<small>${g.length}</small></span><span class="he">${esc(sec.he)}</span></div><div class="fcards">${g.map(recCard).join("")}</div></div>`;
       }).join("");
@@ -507,9 +524,19 @@
     $("#spResults").addEventListener("click", (e) => {
       const u = e.target.closest("[data-unfav]");
       if (u) { e.stopPropagation(); unfav(u.dataset.unfav); const i = recs.findIndex((r) => r.key === u.dataset.unfav); if (i >= 0) recs.splice(i, 1); draw(); return; }
+      const ad = e.target.closest("[data-addfav]");
+      if (ad) {
+        e.stopPropagation();
+        const [k, ...a] = ad.dataset.addfav.split(":");
+        if (k === "p") { const [s2, c2, v2] = a; if (!isFav(s2, +c2, +v2)) toggleFav(s2, +c2, +v2); syncMarks(s2, +c2, +v2); }
+        else { const [cid, s2, c2, v2, i2] = a; if (!isCommFav(cid, s2, +c2, +v2, +i2)) toggleCommFav(cid, s2, +c2, +v2, +i2); }
+        const i = extra.findIndex((r) => r.key === ad.dataset.addfav);
+        if (i >= 0) { const r = extra.splice(i, 1)[0]; r.notFav = false; recs.push(r); }
+        draw(); return;
+      }
       if (e.target.closest("a")) return;
       const card = e.target.closest(".fcard"); if (!card) return;
-      const r = recs.find((x) => x.key === card.dataset.key); if (!r) return;
+      const r = pool().find((x) => x.key === card.dataset.key); if (!r) return;
       openSource(r.kind === "intro" ? { kind: "intro", s: r.s, cid: r.cid, key: r.ikey, p: r.p, parsha: r.parshaId, c: r.c } : { s: r.s, c: r.c, v: r.v, cid: r.kind === "comm" ? r.cid : "", i: r.i });
     });
   }
@@ -518,6 +545,311 @@
   let divrei = store.get("divrei", []);
   let DT_INDEX = null;
   const saveDivrei = () => { store.set("divrei", divrei); DT_INDEX = null; };
+  /* ── rich text for divrei Torah: what is pasted (Word, GoodNotes, a web page), typed or uploaded (.docx, .rtf,
+     .txt) is kept as clean HTML — paragraphs, headings, lists, bold, italic, underline — and nothing else, so no
+     code or styling is ever seen. The plain text (for searching and for finding sources) is read from that HTML the
+     same way every time (`richText`): blocks are separated by a blank line, a line break is a new line. ── */
+  const RICH_DROP = new Set(["script", "style", "meta", "link", "title", "head", "xml", "svg", "math", "img", "picture", "video", "audio", "iframe", "object", "embed", "input", "button", "select", "textarea", "canvas", "template", "noscript"]);
+  const RICH_BLOCK = new Set(["p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "blockquote", "pre", "section", "article", "header", "footer", "tr", "dt", "dd", "figcaption", "address", "center"]);
+  const HE_CHAR = /[֐-׿]/;
+  function sanitizeRich(html) {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const out = []; let cur = null;
+    const flush = () => {
+      if (cur) { cur.html = cur.html.replace(/^(\s|<br>)+|(\s|<br>)+$/g, ""); if (cur.html.replace(/<[^>]+>/g, "").trim()) out.push(cur); }
+      cur = null;
+    };
+    const add = (s, tag) => { if (!cur) cur = { tag: tag || "p", html: "" }; cur.html += s; };
+    const wrap = (t, f) => {
+      const bold = HE_CHAR.test(t) ? f.bcs : f.b;
+      if (f.sup) t = `<sup>${t}</sup>`; else if (f.sub) t = `<sub>${t}</sub>`;
+      if (f.u) t = `<u>${t}</u>`; if (HE_CHAR.test(t) ? f.ics : f.i) t = `<i>${t}</i>`; if (bold) t = `<b>${t}</b>`;
+      return t;
+    };
+    const walk = (node, f, list) => {
+      for (const n of node.childNodes) {
+        if (n.nodeType === 3) { const t = n.data.replace(/[\r\n\t]+/g, " ").replace(/ /g, " "); if (t) add(wrap(esc(t), f)); continue; }
+        if (n.nodeType !== 1) continue;
+        const tag = n.tagName.toLowerCase();
+        if (RICH_DROP.has(tag) || tag.includes(":")) continue;                 // Word's <o:p>, <v:shape> …
+        const st = (n.getAttribute("style") || "").toLowerCase().replace(/\s+/g, "");
+        if (/display:none|visibility:hidden|mso-hide:all/.test(st)) continue;
+        const g = Object.assign({}, f);
+        const on = (re) => re.test(st);
+        if (tag === "b" || tag === "strong") { g.b = !on(/(^|;)font-weight:(normal|[1-4]00)/); g.bcs = !on(/mso-bidi-font-weight:normal/) && g.b || on(/mso-bidi-font-weight:bold/); }
+        else {
+          if (on(/(^|;)font-weight:(bold|bolder|[6-9]00)/)) { g.b = true; g.bcs = !on(/mso-bidi-font-weight:normal/); }
+          else if (on(/(^|;)font-weight:(normal|[1-4]00)/)) { g.b = false; g.bcs = on(/mso-bidi-font-weight:bold/); }
+          else if (on(/mso-bidi-font-weight:bold/)) g.bcs = true;
+          else if (on(/mso-bidi-font-weight:normal/)) g.bcs = false;
+        }
+        if (tag === "i" || tag === "em" || on(/(^|;)font-style:italic/)) { g.i = true; g.ics = !on(/mso-bidi-font-style:normal/); }
+        else if (on(/mso-bidi-font-style:italic/)) g.ics = true;
+        if (tag === "u" || tag === "ins" || on(/text-decoration[^;]*underline/)) g.u = true;
+        if (tag === "sup" || on(/vertical-align:super/)) g.sup = true;
+        if (tag === "sub" || on(/vertical-align:sub/)) g.sub = true;
+        if (tag === "br") { add("<br>"); continue; }
+        if (tag === "td" || tag === "th") { walk(n, g, list); add(" "); continue; }
+        if (tag === "ul" || tag === "ol") { flush(); walk(n, g, tag); flush(); continue; }
+        if (RICH_BLOCK.has(tag)) {
+          const bt = /^h[1-6]$/.test(tag) ? "h3" : tag === "li" ? "li" : tag === "blockquote" ? "blockquote" : "p";
+          flush(); cur = { tag: bt, html: "", list: bt === "li" ? list || "ul" : null };
+          walk(n, g, list); flush(); continue;
+        }
+        walk(n, g, list);
+      }
+    };
+    walk(doc.body, { b: false, bcs: false, i: false, ics: false }, null); flush();
+    let h = "", openList = null;
+    for (const b of out) {
+      const html = b.html.replace(/<\/(b|i|u)><\1>/g, "").replace(/\s{2,}/g, " ");
+      if (b.tag === "li") { if (openList !== b.list) { if (openList) h += `</${openList}>`; h += `<${b.list}>`; openList = b.list; } h += `<li dir="auto">${html}</li>`; continue; }
+      if (openList) { h += `</${openList}>`; openList = null; }
+      h += `<${b.tag} dir="auto">${html}</${b.tag}>`;
+    }
+    if (openList) h += `</${openList}>`;
+    return h;
+  }
+  /* plain text typed or pasted: paragraphs at blank lines, line breaks kept; **bold**, *italic*, __underline__ read */
+  function richFromText(text) {
+    const md = (s) => s.replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>").replace(/__([^_\n]+)__/g, "<u>$1</u>").replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/g, "$1<i>$2</i>");
+    return (text || "").replace(/\r\n?/g, "\n").split(/\n{2,}/).map((p) => p.trim()).filter(Boolean)
+      .map((p) => `<p dir="auto">${md(esc(p)).replace(/\n/g, "<br>")}</p>`).join("");
+  }
+  const looksHTML = (t) => /<\/?(p|div|br|b|strong|i|em|u|span|h[1-6]|ul|ol|li)(\s[^>]*)?>/i.test(t);
+  /* the text of rich HTML, and where each text node starts in it */
+  function richText(root) {
+    let text = "", nodes = [], blockOpen = false;
+    const sep = (s) => { if (text && !/\n\n$/.test(text)) text = text.replace(/\n$/, "") + s; };
+    const walk = (node) => {
+      for (const n of node.childNodes) {
+        if (n.nodeType === 3) { nodes.push([n, text.length]); text += n.data; continue; }
+        if (n.nodeType !== 1) continue;
+        const tag = n.tagName.toLowerCase();
+        if (tag === "br") { text += "\n"; continue; }
+        const block = RICH_BLOCK.has(tag) || tag === "ul" || tag === "ol";
+        if (block) sep("\n\n");
+        walk(n);
+        if (block) sep("\n\n");
+      }
+    };
+    walk(root);
+    return { text: text.replace(/\n+$/, ""), nodes };
+  }
+  const richHolder = (html) => { const t = document.createElement("div"); t.innerHTML = html; return t; };
+  const textOfRich = (html) => richText(richHolder(html)).text;
+  /* the dvar Torah's HTML with every source a link (sources are character ranges of its text) */
+  function linkRich(html, src) {
+    const root = richHolder(html), { nodes } = richText(root);
+    const order = src.map((x, n) => [x, n]).filter(([x]) => x.b > x.a).sort((p, q) => q[0].a - p[0].a);
+    let lastA = Infinity;
+    for (const [x, n] of order) {
+      if (x.b > lastA) continue;                                                  // overlaps a later one
+      lastA = x.a;
+      for (let k = nodes.length - 1; k >= 0; k--) {
+        const [node, st] = nodes[k], en = st + node.data.length;
+        if (en <= x.a || st >= x.b) continue;
+        const s = Math.max(0, x.a - st), e = Math.min(node.data.length, x.b - st);
+        const mid = node.splitText(s); mid.splitText(e - s);
+        const a = document.createElement("a"); a.className = "dt-src" + (srcFav(x) ? " fav" : ""); a.href = "#"; a.dataset.n = n; a.title = srcLabel(x)[0];
+        mid.parentNode.insertBefore(a, mid); a.appendChild(mid);
+      }
+    }
+    return root.innerHTML;
+  }
+  /* RTF (what some apps put on the clipboard, and .rtf files) → HTML: paragraphs, bold, italic, underline, Hebrew */
+  function rtfToHtml(rtf) {
+    let i = 0, html = "", para = "", cp = 1252, uc = 1, skip = 0;
+    const stack = []; let f = { b: false, i: false, u: false, dest: false };
+    const bytes = [];
+    const flushBytes = () => { if (!bytes.length) return; let t = ""; try { t = new TextDecoder("windows-" + cp).decode(new Uint8Array(bytes)); } catch { t = String.fromCharCode(...bytes); } bytes.length = 0; emit(t); };
+    const emit = (t) => { if (f.dest || !t) return; let s = esc(t); if (f.u) s = `<u>${s}</u>`; if (f.i) s = `<i>${s}</i>`; if (f.b) s = `<b>${s}</b>`; para += s; };
+    const endPara = () => { flushBytes(); html += `<p>${para}</p>`; para = ""; };
+    const DEST = /^(fonttbl|colortbl|stylesheet|info|pict|header|footer|headerl|headerr|footerl|footerr|listtable|listoverridetable|rsidtbl|generator|xmlnstbl|themedata|colorschememapping|latentstyles|datastore|mmathPr|pgdsctbl|object|field|fldinst|bkmkstart|bkmkend|footnote|annotation|xe|tc)$/;
+    while (i < rtf.length) {
+      const ch = rtf[i];
+      if (ch === "{") { flushBytes(); stack.push(Object.assign({}, f, { uc })); i++; continue; }
+      if (ch === "}") { flushBytes(); const p = stack.pop(); if (p) { uc = p.uc; f = p; } i++; continue; }
+      if (ch === "\\") {
+        const nx = rtf[i + 1];
+        if (nx === "'") { const b = parseInt(rtf.substr(i + 2, 2), 16); i += 4; if (skip > 0) { skip--; continue; } if (!f.dest) bytes.push(b); continue; }
+        if (nx === "*") { f.dest = true; i += 2; continue; }
+        if (nx === "\\" || nx === "{" || nx === "}") { flushBytes(); if (skip > 0) skip--; else emit(nx); i += 2; continue; }
+        if (nx === "~") { flushBytes(); emit(" "); i += 2; continue; }
+        if (nx === "\n" || nx === "\r") { endPara(); i += 2; continue; }
+        const m = /^\\([a-zA-Z]+)(-?\d+)? ?/.exec(rtf.slice(i, i + 40));
+        if (!m) { i += 2; continue; }
+        i += m[0].length; const w = m[1], n = m[2] == null ? null : +m[2];
+        if (DEST.test(w)) { f.dest = true; continue; }
+        flushBytes();
+        if (w === "par" || w === "sect") endPara();
+        else if (w === "line") para += "<br>";
+        else if (w === "tab") emit(" ");
+        else if (w === "b" || w === "ab") f.b = n !== 0;
+        else if (w === "i" || w === "ai") f.i = n !== 0;
+        else if (w === "ul") f.u = n !== 0;
+        else if (w === "ulnone") f.u = false;
+        else if (w === "plain") { f.b = f.i = f.u = false; }
+        else if (w === "ansicpg") cp = n;
+        else if (w === "uc") uc = n;
+        else if (w === "u") { emit(String.fromCharCode(n < 0 ? n + 65536 : n)); skip = uc; }
+        continue;
+      }
+      if (ch === "\r" || ch === "\n") { i++; continue; }
+      if (skip > 0) { skip--; i++; continue; }
+      flushBytes(); emit(ch); i++;
+    }
+    endPara();
+    return sanitizeRich(html);
+  }
+  /* a Word file (.docx): its paragraphs and runs, bold / italic / underline (Hebrew bold is w:bCs) */
+  async function docxToHtml(buf) {
+    const u8 = new Uint8Array(buf), dv = new DataView(buf);
+    let eocd = -1; for (let p = u8.length - 22; p >= Math.max(0, u8.length - 70000); p--) if (dv.getUint32(p, true) === 0x06054b50) { eocd = p; break; }
+    if (eocd < 0) throw new Error("not a zip");
+    let p = dv.getUint32(eocd + 16, true); const count = dv.getUint16(eocd + 10, true); let entry = null;
+    for (let k = 0; k < count; k++) {
+      const method = dv.getUint16(p + 10, true), csize = dv.getUint32(p + 20, true), nlen = dv.getUint16(p + 28, true), xlen = dv.getUint16(p + 30, true), clen = dv.getUint16(p + 32, true), off = dv.getUint32(p + 42, true);
+      const name = new TextDecoder().decode(u8.subarray(p + 46, p + 46 + nlen));
+      if (name === "word/document.xml") entry = { method, csize, off };
+      p += 46 + nlen + xlen + clen;
+    }
+    if (!entry) throw new Error("no document");
+    const lh = entry.off, start = lh + 30 + dv.getUint16(lh + 26, true) + dv.getUint16(lh + 28, true);
+    let data = u8.subarray(start, start + entry.csize);
+    if (entry.method === 8) data = new Uint8Array(await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).arrayBuffer());
+    const xml = new DOMParser().parseFromString(new TextDecoder().decode(data), "application/xml");
+    const W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    const on = (pr, tag) => { const e = pr && pr.getElementsByTagNameNS(W, tag)[0]; if (!e) return null; const v = e.getAttributeNS(W, "val"); return !(v === "0" || v === "false" || v === "none"); };
+    let html = "";
+    for (const para of xml.getElementsByTagNameNS(W, "p")) {
+      const ppr = para.getElementsByTagNameNS(W, "pPr")[0], style = ppr && ppr.getElementsByTagNameNS(W, "pStyle")[0];
+      const head = style && /heading|title|כותרת/i.test(style.getAttributeNS(W, "val") || "");
+      let ph = "";
+      for (const r of para.getElementsByTagNameNS(W, "r")) {
+        const rpr = r.getElementsByTagNameNS(W, "rPr")[0];
+        const b = on(rpr, "b"), bcs = on(rpr, "bCs"), it = on(rpr, "i"), ics = on(rpr, "iCs"), ul = on(rpr, "u");
+        for (const c of r.childNodes) {
+          if (c.namespaceURI !== W) continue;
+          let t = c.localName === "t" ? c.textContent : c.localName === "tab" ? " " : c.localName === "br" ? "\n" : "";
+          if (!t) continue;
+          if (t === "\n") { ph += "<br>"; continue; }
+          const he = HE_CHAR.test(t); let s = esc(t);
+          if (ul) s = `<u>${s}</u>`; if (he ? (ics ?? it) : it) s = `<i>${s}</i>`; if (he ? (bcs ?? b) : b) s = `<b>${s}</b>`;
+          ph += s;
+        }
+      }
+      html += head ? `<h3>${ph}</h3>` : `<p>${ph}</p>`;
+    }
+    return sanitizeRich(html);
+  }
+  /* pasting into the editor: HTML (Word, web pages), else RTF (some apps), else plain text — always cleaned */
+  function wireRichEditor(ed, onChange) {
+    const insert = (html) => {
+      ed.focus();
+      if (!document.execCommand("insertHTML", false, html)) {
+        const sel = getSelection(); if (!sel.rangeCount) { ed.insertAdjacentHTML("beforeend", html); return; }
+        const r = sel.getRangeAt(0); r.deleteContents(); const frag = r.createContextualFragment(html); const last = frag.lastChild; r.insertNode(frag);
+        if (last) { r.setStartAfter(last); r.collapse(true); sel.removeAllRanges(); sel.addRange(r); }
+      }
+    };
+    ed.addEventListener("paste", (e) => {
+      const cd = e.clipboardData; if (!cd) return;
+      const types = [...(cd.types || [])];
+      const html = types.includes("text/html") ? cd.getData("text/html") : "";
+      const rtf = !html && (types.includes("text/rtf") || types.includes("application/rtf")) ? cd.getData("text/rtf") || cd.getData("application/rtf") : "";
+      const text = cd.getData("text/plain");
+      let out = "";
+      if (html && html.replace(/<[^>]+>/g, "").trim()) out = sanitizeRich(html);
+      else if (rtf) out = rtfToHtml(rtf);
+      else if (text) out = looksHTML(text) ? sanitizeRich(richFromText(text).replace(/&lt;(\/?[a-z][a-z0-9]*(?:\s[^&]*?)?)&gt;/gi, "<$1>").replace(/&quot;/g, '"').replace(/&#39;/g, "'")) : richFromText(text);
+      else return;                                                     // let the browser paste (then it is cleaned below)
+      e.preventDefault();
+      // a single paragraph pastes into the line, without breaking it
+      const one = /^<p dir="auto">((?:(?!<\/?p[ >]).)*)<\/p>$/s.exec(out);
+      insert(one ? one[1] : out); onChange();
+    });
+    // anything the browser put in by itself (drag and drop, an app's own paste) is cleaned too
+    ed.addEventListener("input", (e) => {
+      if (e.inputType === "insertFromPaste" || e.inputType === "insertFromDrop" || e.inputType === "insertReplacementText") {
+        if (/\s(style|class)=|<(span|font|o:p|meta|table)/i.test(ed.innerHTML)) { ed.innerHTML = sanitizeRich(ed.innerHTML); placeCaretEnd(ed); }
+      }
+      onChange();
+    });
+  }
+  const placeCaretEnd = (el) => { const r = document.createRange(); r.selectNodeContents(el); r.collapse(false); const s = getSelection(); s.removeAllRanges(); s.addRange(r); };
+  /* what a dvar Torah is on: {s: sefer, p: parsha id, c: perek, v: pasuk, topic} — chosen when it is saved (filled in
+     from its sources if left empty), and what the Divrei Torah page filters by; and who said it (d.rabbi) */
+  function plainToRich(text) { return (text || "").split(/\n{2,}/).map((p) => `<p dir="auto">${esc(p).replace(/\n/g, "<br>")}</p>`).join(""); }
+  function remapSrc(oldT, newT, src) {
+    const map = new Array(oldT.length + 1); let i = 0, j = 0;
+    while (i < oldT.length) {
+      if (j < newT.length && oldT[i] === newT[j]) { map[i++] = j++; continue; }
+      if (/\s/.test(oldT[i])) { map[i++] = j; continue; }
+      if (j < newT.length && /\s/.test(newT[j])) { j++; continue; }
+      map[i++] = j; if (j < newT.length) j++;
+    }
+    map[oldT.length] = newT.length;
+    return src.map((x) => Object.assign({}, x, { a: map[x.a] ?? x.a, b: map[x.b] ?? x.b }));
+  }
+  function guessOn(src) {
+    const pes = src.filter((x) => x.v || x.c); if (!pes.length) return {};
+    const n = new Map(); for (const x of pes) n.set(x.s, (n.get(x.s) || 0) + 1);
+    const s = [...n.entries()].sort((a, b) => b[1] - a[1] || ORDER.indexOf(a[0]) - ORDER.indexOf(b[0]))[0][0];
+    const first = pes.find((x) => x.s === s);
+    const p = first.v ? parshiotAt(s, first.c, first.v)[0] : null;
+    return p ? { s, p: p.id } : { s, c: first.c };
+  }
+  let divreiOk = false;
+  function divreiReady() {
+    if (divreiOk || !INDEX) return; divreiOk = true;
+    let changed = false;
+    for (const d of divrei) {
+      if (!d.html) { const html = plainToRich(d.text || ""), nt = textOfRich(html); d.src = remapSrc(d.text || "", nt, d.src || []); d.html = html; d.text = nt; changed = true; }
+      if (!d.on) { d.on = guessOn(d.src || []); changed = true; }
+    }
+    if (changed) saveDivrei();
+  }
+  const parshaById = (id) => INDEX.parshiot.find((p) => p.id === id);
+  function onSefer(on) { return on.s || (on.p && parshaById(on.p) ? parshaById(on.p).range[0] : ""); }
+  function onLabel(on) {
+    on = on || {}; const en = [], he = [];
+    const p = on.p && parshaById(on.p), s = onSefer(on);
+    if (p) { en.push(`Parashat ${p.en}`); he.push(`פרשת ${p.he}`); }
+    if (s && (!p || on.c)) {
+      const b = book(s);
+      if (on.c && on.v) { en.push(refEn(s, on.c, on.v)); he.push(refHe(s, on.c, on.v)); }
+      else if (on.c) { en.push(`${b.en} ${on.c}`); he.push(`${b.he} ${plainGem(on.c)}`); }
+      else { en.push(b.en); he.push(b.he); }
+    }
+    if (on.topic) { en.push(on.topic); he.push(on.topic); }
+    return [en.join(" · "), he.join(" · ")];
+  }
+  function onMatches(d, F) {
+    const on = d.on || {}, s = onSefer(on);
+    if (F.sec && !(s && book(s).section === F.sec)) return false;
+    if (F.sefer && s !== F.sefer) return false;
+    if (F.parsha) {
+      if (on.p) { if (on.p !== F.parsha) return false; }
+      else { const p = parshaById(F.parsha); if (!p || s !== p.range[0] || !on.c || !parshiotAt(s, on.c, on.v || 1).includes(p)) return false; }
+    }
+    const c = numOf(F.c), v = numOf(F.v);
+    if (c && on.c !== c) return false;
+    if (v && on.v !== v) return false;
+    if (F.rabbi && (d.rabbi || "") !== F.rabbi) return false;
+    if (F.topic && (on.topic || "") !== F.topic) return false;
+    return true;
+  }
+  /* <select> options for every sefer (by section) and every parsha (by chumash); counts beside those in use */
+  function seferOptions(count) {
+    return INDEX.sections.map((sec) => `<optgroup label="${esc(sec.en)} · ${esc(sec.he)}">` +
+      ORDER.filter((s) => book(s).section === sec.id).map((s) => { const n = count ? count(s) : 0; return `<option value="${s}">${esc(book(s).en)} · ${esc(book(s).he)}${n ? ` (${n})` : ""}</option>`; }).join("") + `</optgroup>`).join("");
+  }
+  function parshaOptions(count, only) {
+    const bySefer = new Map(); for (const p of INDEX.parshiot) { if (only && p.range[0] !== only) continue; const l = bySefer.get(p.range[0]) || []; l.push(p); bySefer.set(p.range[0], l); }
+    return [...bySefer.entries()].map(([s, ps]) => `<optgroup label="${esc(book(s).en)} · ${esc(book(s).he)}">` +
+      ps.map((p) => { const n = count ? count(p.id) : 0; return `<option value="${p.id}">${esc(p.en)} · ${esc(p.he)}${n ? ` (${n})` : ""}</option>`; }).join("") + `</optgroup>`).join("");
+  }
   /* every source key → the divrei Torah that quote it ("p:s:c:v" for a pasuk, "c:cid:s:c:v:i" for a comment) */
   function dtIndex() {
     if (DT_INDEX) return DT_INDEX;
@@ -692,19 +1024,6 @@
   }
   const srcFav = (x) => (x.k === "c" ? isCommFav(x.cid, x.s, x.c, x.v, x.i) : x.v ? isFav(x.s, x.c, x.v) : false);
   const dvarDate = (t) => { try { return new Date(t).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }); } catch { return ""; } };
-  function dvarBodyHTML(d) {
-    const text = d.text || "", src = (d.src || []).slice().sort((a, b) => a.a - b.a);
-    let h = "", pos = 0;
-    for (const [n, x] of src.entries()) {
-      if (x.a < pos) continue;
-      h += esc(text.slice(pos, x.a));
-      const [le] = srcLabel(x);
-      h += `<a class="dt-src${srcFav(x) ? " fav" : ""}" href="#" data-n="${(d.src || []).indexOf(x)}" title="${esc(le)}">${esc(text.slice(x.a, x.b))}</a>`;
-      pos = x.b;
-    }
-    h += esc(text.slice(pos));
-    return h.split(/\n{2,}/).map((p) => `<p dir="auto">${p.replace(/\n/g, "<br>")}</p>`).join("");
-  }
   function sourcesListHTML(d) {
     const seen = new Set(), rows = [];
     (d.src || []).forEach((x, n) => { const k = srcKey(x); if (seen.has(k)) return; seen.add(k); rows.push([x, n]); });
@@ -726,17 +1045,17 @@
       }
     });
   }
-  const DT_F = { q: "", sec: "", sefer: "", parsha: "", cid: "" };
+  const DT_F = { q: "", sec: "", sefer: "", parsha: "", c: "", v: "", rabbi: "", topic: "" };
+  const dvRabbis = () => [...new Set(divrei.map((d) => (d.rabbi || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const dvTopics = () => [...new Set(divrei.map((d) => ((d.on || {}).topic || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   function renderDivreiPage() {
-    leavePages(); setPicker(null);
+    leavePages(); setPicker(null); divreiReady();
     document.title = "Divrei Torah — Tanach Reader";
     const F = DT_F, app = $("#app");
     const all = divrei.slice().sort((a, b) => (b.u || b.t) - (a.u || a.t));
-    const used = (fn) => [...new Set(all.flatMap((d) => (d.src || []).map(fn)).filter(Boolean))];
-    const sefarim = ORDER.filter((s) => used((x) => x.s).includes(s)).map((s) => [s, `${book(s).en} · ${book(s).he}`]);
-    const parshiot = INDEX.parshiot.filter((p) => all.some((d) => (d.src || []).some((x) => x.v && parshiotAt(x.s, x.c, x.v).includes(p)))).map((p) => [p.id, `${p.en} · ${p.he}`]);
-    const cids = COMMENTARIES.filter((m) => used((x) => x.cid).includes(m.id)).map((m) => [m.id, `${m.en} · ${m.he}`]);
-    const opts = (vals, allT) => `<option value="">${esc(allT)}</option>` + vals.map(([v, t]) => `<option value="${esc(v)}">${esc(t)}</option>`).join("");
+    const cnt = (fn) => (x) => all.filter((d) => fn(d, x)).length;
+    const opts = (vals, allT) => `<option value="">${esc(allT)}</option>` + vals.map((v) => `<option value="${esc(v)}">${esc(v)} (${all.filter((d) => (d.rabbi || "") === v || (d.on || {}).topic === v).length})</option>`).join("");
+    const rabbis = dvRabbis(), topics = dvTopics();
     app.innerHTML = `<div class="saved-page">
         ${savedTabs("dt")}
         <div class="dt-actions">
@@ -744,25 +1063,27 @@
           <button type="button" class="dt-exp">Export</button>
           <label class="dt-imp">Import<input type="file" accept="application/json,.json" hidden></label>
         </div>
-        <div class="sp-search"><input type="search" id="dtQ" value="${esc(F.q)}" placeholder="Search your divrei Torah…  חיפוש" autocomplete="off" spellcheck="false" aria-label="Search your divrei Torah"></div>
+        <div class="sp-search"><input type="search" id="dtQ" value="${esc(F.q)}" placeholder="Search the divrei Torah — title, text, Rabbi…  חיפוש" autocomplete="off" spellcheck="false" aria-label="Search your divrei Torah"></div>
         <div class="sp-filters">
           <div class="sp-chips" data-f="sec">${[["", "All"], ...INDEX.sections.map((s) => [s.id, s.en, s.he])].map(([v, en, he]) => `<button type="button" data-v="${v}" class="${F.sec === v ? "on" : ""}">${esc(en)}${he ? ` <span class="he">${esc(he)}</span>` : ""}</button>`).join("")}</div>
           <div class="sp-row">
-            <select data-f="sefer" aria-label="Sefer">${opts(sefarim, "Every sefer")}</select>
-            <select data-f="parsha" aria-label="Parsha">${opts(parshiot, "Every parsha")}</select>
-            <select data-f="cid" aria-label="Meforash">${opts(cids, "Every meforash")}</select>
+            <select data-f="sefer" aria-label="On which sefer"><option value="">Every sefer</option>${seferOptions(cnt((d, s) => onSefer(d.on || {}) === s))}</select>
+            <select data-f="parsha" aria-label="On which parsha"><option value="">Every parsha</option>${parshaOptions(cnt((d, id) => onMatches(d, { parsha: id })))}</select>
+          </div>
+          <div class="sp-row">
+            <input data-f="c" value="${esc(F.c)}" placeholder="Perek  פרק" aria-label="Perek">
+            <input data-f="v" value="${esc(F.v)}" placeholder="Pasuk  פסוק" aria-label="Pasuk">
+            ${rabbis.length ? `<select data-f="rabbi" aria-label="Rabbi">${opts(rabbis, "Every Rabbi")}</select>` : ""}
+            ${topics.length ? `<select data-f="topic" aria-label="Topic">${opts(topics, "Every topic")}</select>` : ""}
+            <button type="button" class="sp-clear">Clear</button>
           </div>
         </div>
         <div id="dtResults"></div>
       </div>`;
     $$(".sp-filters select", app).forEach((s) => { s.value = F[s.dataset.f] || ""; });
     const match = (d) => {
-      const src = d.src || [];
-      if (F.sec && !src.some((x) => book(x.s).section === F.sec)) return false;
-      if (F.sefer && !src.some((x) => x.s === F.sefer)) return false;
-      if (F.parsha && !src.some((x) => x.v && parshiotAt(x.s, x.c, x.v).some((p) => p.id === F.parsha))) return false;
-      if (F.cid && !src.some((x) => x.cid === F.cid)) return false;
-      if (F.q) { const he = heNorm(d.title + " " + d.text), en = (d.title + " " + d.text).toLowerCase();
+      if (!onMatches(d, F)) return false;
+      if (F.q) { const t = `${d.title} ${d.rabbi || ""} ${(d.on || {}).topic || ""} ${d.text}`, he = heNorm(t), en = t.toLowerCase();
         for (const w of F.q.trim().split(/\s+/)) { if (/[א-ת]/.test(w) ? !he.includes(heNorm(w)) : !en.includes(w.toLowerCase())) return false; } }
       return true;
     };
@@ -771,19 +1092,26 @@
       if (!all.length) { res.innerHTML = `<p class="empty">No divrei Torah yet. Paste one in with “Add a dvar Torah” — the pesukim and meforshim it quotes are found and linked.</p>`; return; }
       if (!hits.length) { res.innerHTML = `<p class="empty">Nothing matches.</p>`; return; }
       res.innerHTML = `<div class="sp-count">${hits.length} of ${all.length}</div><div class="dcards">` + hits.map((d) => {
-        const keys = [...new Set((d.src || []).map(srcKey))].slice(0, 6).map((k) => d.src.find((x) => srcKey(x) === k));
+        const [oe, oh] = onLabel(d.on), n = new Set((d.src || []).map(srcKey)).size;
         return `<a class="dcard" href="#dvar-${d.id}">
             <div class="dc-title" dir="auto">${esc(d.title || "Dvar Torah")}</div>
-            <div class="dc-date">${esc(dvarDate(d.u || d.t))} · ${(new Set((d.src || []).map(srcKey))).size} sources</div>
+            ${d.rabbi || oe ? `<div class="dc-on">${d.rabbi ? `<span class="dc-rabbi" dir="auto">${esc(d.rabbi)}</span>` : ""}${oe ? `<span class="en">${esc(oe)}</span><span class="he">${esc(oh)}</span>` : ""}</div>` : ""}
+            <div class="dc-date">${esc(dvarDate(d.u || d.t))} · ${n} source${n === 1 ? "" : "s"}</div>
             <div class="dc-text" dir="auto">${esc((d.text || "").slice(0, 260))}</div>
-            ${keys.length ? `<div class="dc-src">${keys.map((x) => `<span>${esc(srcLabel(x)[0])}</span>`).join("")}</div>` : ""}
           </a>`; }).join("") + `</div>`;
     };
     draw();
     let t = 0;
     $("#dtQ").addEventListener("input", (e) => { F.q = e.target.value; clearTimeout(t); t = setTimeout(draw, 150); });
-    $$(".sp-filters select", app).forEach((sel) => sel.addEventListener("change", () => { F[sel.dataset.f] = sel.value; draw(); }));
+    $$(".sp-filters input[data-f]", app).forEach((inp) => inp.addEventListener("input", () => { F[inp.dataset.f] = inp.value; clearTimeout(t); t = setTimeout(draw, 150); }));
+    $$(".sp-filters select", app).forEach((sel) => sel.addEventListener("change", () => {
+      F[sel.dataset.f] = sel.value;
+      if (sel.dataset.f === "parsha" && sel.value) { F.sefer = parshaById(sel.value).range[0]; $('.sp-filters select[data-f="sefer"]', app).value = F.sefer; }
+      if (sel.dataset.f === "sefer" && F.parsha && parshaById(F.parsha).range[0] !== sel.value) { F.parsha = ""; $('.sp-filters select[data-f="parsha"]', app).value = ""; }
+      draw();
+    }));
     $(".sp-chips", app).addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; F.sec = b.dataset.v; $$(".sp-chips button", app).forEach((x) => x.classList.toggle("on", x === b)); draw(); });
+    $(".sp-clear", app).addEventListener("click", () => { Object.keys(F).forEach((k) => (F[k] = "")); renderDivreiPage(); });
     $(".dt-exp", app).addEventListener("click", () => {
       const blob = new Blob([JSON.stringify({ divrei, favourites }, null, 1)], { type: "application/json" });
       const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "tanach-divrei-torah.json"; document.body.append(a); a.click(); a.remove();
@@ -795,24 +1123,27 @@
         const d = JSON.parse(await file.text()); let n = 0, nf = 0;
         for (const x of d.divrei || []) if (x && x.id && !divrei.some((y) => y.id === x.id)) { divrei.push(x); n++; }
         for (const f of d.favourites || []) if (f && f.b && !favourites.some((g) => JSON.stringify({ ...g, t: 0 }) === JSON.stringify({ ...f, t: 0 }))) { favourites.push(f); nf++; }
-        saveDivrei(); store.set("favourites", favourites);
+        saveDivrei(); store.set("favourites", favourites); divreiOk = false;
         toast(`Imported ${n} divrei Torah and ${nf} favourites`); renderDivreiPage();
       } catch { toast("That file couldn't be read"); }
     });
   }
   function renderDvarPage(id) {
-    leavePages(); setPicker(null);
+    leavePages(); setPicker(null); divreiReady();
     const d = divrei.find((x) => x.id === id), app = $("#app");
     if (!d) { app.innerHTML = `<div class="saved-page">${savedTabs("dt")}<p class="empty">That dvar Torah isn't here (it may have been deleted, or saved on another device).</p></div>`; return; }
     document.title = `${d.title || "Dvar Torah"} — Tanach Reader`;
+    const [oe, oh] = onLabel(d.on);
     app.innerHTML = `<div class="saved-page">
         ${savedTabs("dt")}
         <article class="dvar">
           <div class="dvar-top"><a href="#divrei-torah" class="dvar-back">← Divrei Torah</a>
             <span class="dvar-tools"><a href="#dvar-edit-${d.id}">Edit</a><button type="button" class="dvar-del">Delete</button></span></div>
           <h1 dir="auto">${esc(d.title || "Dvar Torah")}</h1>
+          ${d.rabbi ? `<div class="dvar-rabbi" dir="auto">${esc(d.rabbi)}</div>` : ""}
+          ${oe ? `<div class="dvar-on"><span class="en">On ${esc(oe)}</span><span class="he">על ${esc(oh)}</span></div>` : ""}
           <div class="dvar-date">${esc(dvarDate(d.t))}${d.u && d.u !== d.t ? ` · edited ${esc(dvarDate(d.u))}` : ""}</div>
-          <div class="dvar-body">${dvarBodyHTML(d)}</div>
+          <div class="dvar-body">${linkRich(d.html || plainToRich(d.text), d.src || [])}</div>
           <h2 class="dvar-sh">Sources <span class="he">מקורות</span></h2>
           <div class="dvar-srcs">${sourcesListHTML(d)}</div>
         </article>
@@ -831,47 +1162,96 @@
     return false;
   }
   function renderDvarEdit(id) {
-    leavePages(); setPicker(null);
+    leavePages(); setPicker(null); divreiReady();
     const d = id ? divrei.find((x) => x.id === id) : null, app = $("#app");
     document.title = `${d ? "Edit" : "New"} dvar Torah — Tanach Reader`;
+    const on = Object.assign({}, d && d.on);
     app.innerHTML = `<div class="saved-page">
         ${savedTabs("dt")}
         <div class="dvar-edit">
           <a href="${d ? `#dvar-${d.id}` : "#divrei-torah"}" class="dvar-back">← ${d ? "Back" : "Divrei Torah"}</a>
           <h1>${d ? "Edit the dvar Torah" : "Add a dvar Torah"}</h1>
           <input id="dvTitle" type="text" placeholder="Title  כותרת" value="${esc(d ? d.title : "")}" dir="auto" aria-label="Title">
-          <textarea id="dvText" placeholder="Paste the dvar Torah here — Hebrew, English or both. The pesukim and meforshim it quotes or names are found and linked." dir="auto" aria-label="The dvar Torah">${esc(d ? d.text : "")}</textarea>
+          <input id="dvRabbi" type="text" list="dvRabbiList" placeholder="Rabbi — who said or wrote it  שם הרב" value="${esc(d && d.rabbi || "")}" dir="auto" aria-label="Rabbi" autocomplete="off">
+          <datalist id="dvRabbiList">${dvRabbis().map((r) => `<option value="${esc(r)}">`).join("")}</datalist>
+          <fieldset class="dv-on"><legend>What it's on <span class="he">על מה</span></legend>
+            <select id="dvSefer" aria-label="Sefer"><option value="">Sefer…</option>${seferOptions()}</select>
+            <select id="dvParsha" aria-label="Parsha"><option value="">Parsha…</option></select>
+            <input id="dvPerek" placeholder="Perek" aria-label="Perek" value="${on.c ? on.c : ""}">
+            <input id="dvPasuk" placeholder="Pasuk" aria-label="Pasuk" value="${on.v ? on.v : ""}">
+            <input id="dvTopic" list="dvTopicList" placeholder="Topic or occasion (Pesach, Chanukah…)" aria-label="Topic or occasion" value="${esc(on.topic || "")}" dir="auto" autocomplete="off">
+            <datalist id="dvTopicList">${dvTopics().map((r) => `<option value="${esc(r)}">`).join("")}</datalist>
+            <p class="dv-note dv-onnote" hidden>Filled in from its sources — change it if it's on something else.</p>
+          </fieldset>
+          <div class="dv-tools" role="toolbar" aria-label="Formatting">
+            <button type="button" data-cmd="bold" aria-label="Bold"><b>B</b></button><button type="button" data-cmd="italic" aria-label="Italic"><i>I</i></button><button type="button" data-cmd="underline" aria-label="Underline"><u>U</u></button>
+            <label class="dv-file">Upload a file<input type="file" accept=".docx,.rtf,.txt,.md,.html,.htm,text/plain,text/rtf,text/html,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden></label>
+            <span class="dv-hint">Paste from Word, GoodNotes or a web page — bold and italics are kept.</span>
+          </div>
+          <div id="dvText" class="dv-rich" contenteditable="true" dir="auto" role="textbox" aria-multiline="true" aria-label="The dvar Torah" data-ph="Paste the dvar Torah here — Hebrew, English or both. The pesukim and meforshim it quotes or names are found and linked.">${d ? d.html || plainToRich(d.text) : ""}</div>
           <div class="dv-btns"><button type="button" class="dv-find">Find the sources</button><button type="button" class="dv-save" disabled>Save</button></div>
           <div class="dv-found"></div>
         </div>
       </div>`;
-    let src = d ? d.src.slice() : null;
-    const ta = $("#dvText"), save = $(".dv-save"), box = $(".dv-found");
+    const ed = $("#dvText"), save = $(".dv-save"), box = $(".dv-found"), sef = $("#dvSefer"), par = $("#dvParsha");
+    const fillParsha = () => { const s = sef.value; par.innerHTML = `<option value="">Parsha…</option>` + parshaOptions(null, s && book(s).section === "torah" ? s : s ? "-" : null); par.disabled = !!s && !INDEX.parshiot.some((p) => p.range[0] === s); };
+    sef.value = onSefer(on) || ""; fillParsha(); par.value = on.p || "";
+    sef.addEventListener("change", () => { const keep = par.value; fillParsha(); if (keep && parshaById(keep).range[0] === sef.value) par.value = keep; $(".dv-onnote").hidden = true; });
+    par.addEventListener("change", () => { if (par.value) { const s = parshaById(par.value).range[0]; if (sef.value !== s) { sef.value = s; const keep = par.value; fillParsha(); par.value = keep; } } $(".dv-onnote").hidden = true; });
+    const curHTML = () => sanitizeRich(ed.innerHTML);
+    let src = d ? (d.src || []).slice() : null, srcText = d ? d.text : "";
     const showFound = () => {
       if (!src) { box.innerHTML = ""; return; }
       const seen = new Map(); src.forEach((x) => { const k = srcKey(x); if (!seen.has(k)) seen.set(k, x); });
       box.innerHTML = `<h2 class="dvar-sh">Found ${seen.size} source${seen.size === 1 ? "" : "s"} <span class="he">מקורות</span></h2>
         <p class="dv-note">Each will be a link in the text. Remove any that isn't right.</p>` +
-        [...seen.entries()].map(([k, x]) => { const [le, lh] = srcLabel(x); const q = src.filter((y) => srcKey(y) === k).map((y) => ta.value.slice(y.a, y.b));
-          return `<div class="dt-srow"><span class="dv-q" dir="auto">“${esc(q[0].slice(0, 60))}${q[0].length > 60 ? "…" : ""}”</span> → <span class="en">${esc(le)}</span> <span class="he">${esc(lh)}</span>
+        [...seen.entries()].map(([k, x]) => { const [le, lh] = srcLabel(x); const q = srcText.slice(x.a, x.b);
+          return `<div class="dt-srow"><span class="dv-q" dir="auto">“${esc(q.slice(0, 60))}${q.length > 60 ? "…" : ""}”</span> → <span class="en">${esc(le)}</span> <span class="he">${esc(lh)}</span>
             <button type="button" class="dv-rm" data-k="${esc(k)}" aria-label="Remove this link">✕</button></div>`; }).join("");
     };
     showFound(); save.disabled = !d;
     const find = async () => {
-      if (!ta.value.trim()) { toast("Paste the dvar Torah first"); return; }
+      srcText = textOfRich(curHTML());
+      if (!srcText.trim()) { toast("Paste the dvar Torah first"); return false; }
       $(".dv-find").disabled = true; box.innerHTML = `<p class="dv-note">Looking for pesukim and meforshim…</p>`;
-      try { src = await findSources(ta.value); } catch (e) { src = []; }
+      try { src = await findSources(srcText); } catch (e) { src = []; }
       $(".dv-find").disabled = false; save.disabled = false; showFound();
+      if (!sef.value && !par.value && !$("#dvTopic").value.trim()) {
+        const g = guessOn(src);
+        if (g.s) { sef.value = g.s; fillParsha(); par.value = g.p || ""; $("#dvPerek").value = g.c || ""; $(".dv-onnote").hidden = false; }
+      }
+      return true;
     };
     $(".dv-find").addEventListener("click", find);
-    ta.addEventListener("input", () => { src = null; showFound(); save.disabled = true; });
+    wireRichEditor(ed, () => { src = null; showFound(); save.disabled = !ed.textContent.trim(); });
+    $(".dv-tools", app).addEventListener("mousedown", (e) => { if (e.target.closest("[data-cmd]")) e.preventDefault(); });
+    $(".dv-tools", app).addEventListener("click", (e) => { const b = e.target.closest("[data-cmd]"); if (!b) return; ed.focus(); document.execCommand(b.dataset.cmd); src = null; showFound(); save.disabled = !ed.textContent.trim(); });
+    $(".dv-file input", app).addEventListener("change", async (e) => {
+      const file = e.target.files[0]; if (!file) return; e.target.value = "";
+      const name = file.name.toLowerCase(); let html = "";
+      try {
+        if (name.endsWith(".docx")) html = await docxToHtml(await file.arrayBuffer());
+        else if (name.endsWith(".rtf")) html = rtfToHtml(await file.text());
+        else if (/\.html?$/.test(name)) html = sanitizeRich(await file.text());
+        else { const t = await file.text(); html = /^\{\\rtf/.test(t) ? rtfToHtml(t) : looksHTML(t) ? sanitizeRich(t) : richFromText(t); }
+      } catch { toast("That file couldn't be read — Word (.docx), RTF or text files work"); return; }
+      if (!html) { toast("That file is empty"); return; }
+      if (ed.textContent.trim()) ed.insertAdjacentHTML("beforeend", html); else ed.innerHTML = html;
+      if (!$("#dvTitle").value.trim()) { const h = richHolder(html).querySelector("h3"); $("#dvTitle").value = h ? h.textContent.trim() : file.name.replace(/\.[^.]+$/, ""); }
+      src = null; showFound(); save.disabled = false; toast("File added");
+    });
     box.addEventListener("click", (e) => { const b = e.target.closest(".dv-rm"); if (!b) return; src = src.filter((x) => srcKey(x) !== b.dataset.k); showFound(); });
     save.addEventListener("click", async () => {
-      if (!src) await find();
-      const now = Date.now(), title = $("#dvTitle").value.trim() || ta.value.trim().split("\n")[0].slice(0, 70);
+      if (!src && !(await find())) return;
+      const html = curHTML(), text = textOfRich(html);
+      if (text !== srcText) { src = await findSources(text).catch(() => []); srcText = text; }
+      const now = Date.now(), title = $("#dvTitle").value.trim() || text.trim().split("\n")[0].slice(0, 70);
+      const onv = { s: sef.value || "", p: par.value || "", c: numOf($("#dvPerek").value), v: numOf($("#dvPasuk").value), topic: $("#dvTopic").value.trim() };
+      Object.keys(onv).forEach((k) => { if (!onv[k]) delete onv[k]; });
+      const rec = { title, rabbi: $("#dvRabbi").value.trim(), on: onv, html, text, src, u: now };
       let x;
-      if (d) { Object.assign(d, { title, text: ta.value, src, u: now }); x = d; }
-      else { x = { id: now.toString(36) + Math.random().toString(36).slice(2, 6), title, text: ta.value, src, t: now, u: now }; divrei.push(x); }
+      if (d) { Object.assign(d, rec); x = d; }
+      else { x = Object.assign({ id: now.toString(36) + Math.random().toString(36).slice(2, 6), t: now }, rec); divrei.push(x); }
       saveDivrei(); toast("Dvar Torah saved"); location.hash = `#dvar-${x.id}`;
     });
   }

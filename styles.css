@@ -1104,8 +1104,16 @@ body.home-view .hero { padding-top: 34px; }
 .dvar-tools .armed { border-color: var(--accent); color: var(--accent); }
 .dvar h1 { font-family: var(--f-he-display); font-size: 1.8rem; margin: 14px 0 2px; color: var(--accent); }
 .dvar-date { font-size: .82rem; color: var(--ink-3); margin-bottom: 14px; }
-.dvar-body p { font-family: var(--f-en); font-size: 1.12rem; line-height: 1.7; margin: 0 0 1em; }
-.dvar-body p:dir(rtl) { font-family: var(--f-he); }
+.dvar-body p, .dvar-body li, .dvar-body blockquote, .dv-rich p, .dv-rich li, .dv-rich div { font-family: var(--f-en); font-size: 1.12rem; line-height: 1.7; }
+.dvar-body p, .dvar-body blockquote, .dv-rich p { margin: 0 0 1em; }
+.dvar-body :is(p, li, blockquote, h3):dir(rtl), .dv-rich :is(p, li, div, h3):dir(rtl) { font-family: var(--f-he); }
+.dvar-body h3, .dv-rich h3 { font-size: 1.22rem; margin: 1.2em 0 .5em; color: var(--ink); }
+.dvar-body ul, .dvar-body ol, .dv-rich ul, .dv-rich ol { margin: 0 0 1em; padding-inline-start: 1.6em; }
+.dvar-body blockquote { border-inline-start: 3px solid var(--rule); padding-inline-start: 12px; color: var(--ink-2); margin-inline: 0; }
+.dvar-body b, .dv-rich b { font-weight: 700; }
+.dvar-rabbi { font-size: 1.05rem; color: var(--ink); margin-top: 2px; }
+.dvar-on { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: .9rem; color: var(--ink-2); margin-top: 2px; }
+.dvar-on .he, .dc-on .he { font-family: var(--f-he-display); }
 .dt-src { color: var(--accent); text-decoration: underline; text-decoration-color: var(--gold); text-underline-offset: 3px; }
 .dt-src.fav { background: color-mix(in srgb, var(--hl) 70%, transparent); border-radius: 3px; }
 .dt-src.fav::after { content: "★"; font-size: .7em; color: var(--gold); margin-inline-start: 2px; vertical-align: super; }
@@ -1116,9 +1124,25 @@ body.home-view .hero { padding-top: 34px; }
 .dt-srow .he { font-family: var(--f-he-display); color: var(--ink-2); }
 .dvar-edit { max-width: 760px; margin: 0 auto; display: grid; gap: 10px; }
 .dvar-edit h1 { font-size: 1.4rem; margin: 6px 0 0; color: var(--accent); }
-#dvTitle, #dvText { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--rule); border-radius: 10px; background: var(--card); font: inherit; color: var(--ink); }
+#dvTitle, #dvRabbi, #dvText, .dv-on select, .dv-on input { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--rule); border-radius: 10px; background: var(--card); font: inherit; color: var(--ink); }
 #dvTitle { font-size: 1.05rem; }
-#dvText { min-height: 46vh; font-size: 1rem; line-height: 1.6; resize: vertical; }
+.dv-on { border: 1px solid var(--rule-2); border-radius: 12px; padding: 8px 10px 10px; margin: 0; display: grid; gap: 8px; grid-template-columns: 1fr 1fr 5.5em 5.5em; }
+.dv-on legend { font-size: .82rem; color: var(--ink-3); padding: 0 4px; }
+.dv-on legend .he { font-family: var(--f-he-display); }
+.dv-on #dvTopic, .dv-on .dv-onnote { grid-column: 1 / -1; }
+.dv-on select, .dv-on input { padding: 8px 10px; font-size: .95rem; }
+.dv-on select:disabled { opacity: .5; }
+@media (max-width: 560px) { .dv-on { grid-template-columns: 1fr 1fr; } }
+.dv-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.dv-tools button, .dv-file { min-width: 36px; height: 34px; padding: 0 10px; border: 1px solid var(--rule); border-radius: 8px; background: var(--card); color: var(--ink-2); font: inherit; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.dv-file { font-size: .88rem; }
+.dv-hint { font-size: .8rem; color: var(--ink-3); }
+#dvText { min-height: 46vh; line-height: 1.6; overflow-wrap: anywhere; outline: none; }
+#dvText:focus { border-color: var(--gold); }
+#dvText:empty::before { content: attr(data-ph); color: var(--ink-3); pointer-events: none; }
+.dc-on { display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: .85rem; color: var(--ink-2); margin-top: 2px; }
+.dc-rabbi { color: var(--ink); }
+.fcard.not-fav { border-style: dashed; }
 .dv-btns { display: flex; gap: 8px; }
 .dv-btns button { padding: 8px 18px; border-radius: 999px; border: 1px solid var(--accent); background: var(--card); color: var(--accent); font: inherit; cursor: pointer; }
 .dv-btns .dv-save { background: var(--accent); color: #fff; }
