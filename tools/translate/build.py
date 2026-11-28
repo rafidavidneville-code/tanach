@@ -4,7 +4,7 @@ adds it to data/<cid>-cl/<slug>.json, then lists the sefer in data/index.json "c
    python3 tools/translate/build.py <cid> <slug>      (run from the repo root)
 A comment whose line count doesn't match is reported and left out (fix it and run again); the rest are added and the
 work file is emptied of them."""
-import json, sys, os, re
+import os, json, sys, os, re
 cid, slug = sys.argv[1], sys.argv[2]
 units = {}
 for line in open(f"tools/translate/units/{cid}/{slug}.jsonl"):
@@ -29,9 +29,12 @@ for k, lines in blocks:
     out[k] = [r["d"], lines]; ok += 1
 def order(k): return tuple(map(int, k.split(":")))
 json.dump(dict(sorted(out.items(), key=lambda x: order(x[0]))), open(out_p, "w"), ensure_ascii=False, separators=(",", ":"))
-with open(work, "w", encoding="utf-8") as f:
-    for k, lines in keep:
-        f.write(f"@{k}\n" + "\n".join(lines) + "\n")
+if keep:
+    with open(work, "w", encoding="utf-8") as f:
+        for k, lines in keep:
+            f.write(f"@{k}\n" + "\n".join(lines) + "\n")
+else:
+    os.remove(work)  # all used
 idx_p = "data/index.json"; idx = json.load(open(idx_p))
 cl = idx.setdefault("cl", {})
 if out and slug not in cl.setdefault(cid, []): cl[cid].append(slug)
