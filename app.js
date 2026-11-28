@@ -150,8 +150,33 @@
      translations, checked against comments aligned by hand); loaded with the English */
   const alignUrl = (cid, slug) => `data/align/${cid}/${slug}.json`;
   const hasAlign = (cid, slug) => !!(INDEX.align && (INDEX.align[cid] || []).includes(slug));
-  const loadCommEn = (cid, slug) => Promise.all([fetchJSON(commEnUrl(cid, slug)), hasAlign(cid, slug) ? fetchJSON(alignUrl(cid, slug)).catch(() => null) : null]).then(([en]) => en);
-  const alignOf = (cid, s, c, v, i) => { const d = cid && resolved.get(alignUrl(cid, s)); return (d && d[`${c}:${v}:${i}`]) || null; };
+  /* Claude's own translation, phrase by phrase (every meforash but Rashi): data/<cid>-cl/<slug>.json =
+     {"c:v:i": [dh (1 if the first Hebrew phrase is the dibbur hamatchil), [English of each Hebrew phrase, in order]]}.
+     It replaces the published translation comment by comment as it is made: loadCommEn lays it over that English, so
+     everything that reads a comment's English (Pages, copying, favourites, search) reads Claude's where it exists */
+  const clUrl = (cid, slug) => `data/${cid}-cl/${slug}.json`;
+  const hasCl = (cid, slug) => !!(INDEX.cl && (INDEX.cl[cid] || []).includes(slug));
+  const CL_MERGED = new Map();
+  const clHTML = (x) => x[1].map((p, k) => (k === 0 && x[0] ? `<b>${esc(p)}</b>` : esc(p))).join(" ");
+  const loadCommEn = (cid, slug) => {
+    const base = Promise.all([hasCl(cid, slug) ? fetchJSON(commEnUrl(cid, slug)).catch(() => { const e = []; resolved.set(commEnUrl(cid, slug), e); return e; }) : fetchJSON(commEnUrl(cid, slug)),
+      hasAlign(cid, slug) ? fetchJSON(alignUrl(cid, slug)).catch(() => null) : null]).then(([en]) => en);
+    if (!hasCl(cid, slug)) return base;
+    const k = cid + ":" + slug;
+    if (!CL_MERGED.has(k)) CL_MERGED.set(k, Promise.all([base, fetchJSON(clUrl(cid, slug))]).then(([en, cl]) => {
+      for (const [key, x] of Object.entries(cl)) {
+        const [c, v, i] = key.split(":").map(Number);
+        (en[c - 1] ||= [])[v - 1] ||= []; en[c - 1][v - 1][i] = clHTML(x);
+      }
+      return en;
+    }).catch((e) => { CL_MERGED.delete(k); return base; }));
+    return CL_MERGED.get(k);
+  };
+  const clOf = (cid, s, c, v, i) => { const d = cid && resolved.get(clUrl(cid, s)); return (d && d[`${c}:${v}:${i}`]) || null; };
+  const alignOf = (cid, s, c, v, i) => {
+    const x = clOf(cid, s, c, v, i); if (x) return { cl: x[1], dh: x[0] };
+    const d = cid && resolved.get(alignUrl(cid, s)); return (d && d[`${c}:${v}:${i}`]) || null;
+  };
   const at = (data, c, v) => (data && data[c - 1] && data[c - 1][v - 1]) || [];
 
   const book = (slug) => INDEX.books[slug];
@@ -454,7 +479,7 @@
         <div class="fc-ref"><span class="en">${esc(re)}</span><span class="he">${esc(rh)}</span></div>
         <div class="fc-he">${r.heHtml}</div>
         ${r.enHtml ? `<div class="fc-en">${r.enHtml}</div>` : ""}
-        ${dts.length ? `<div class="fc-dt">${dts.map((d) => `<a href="#dvar-${d.id}" class="dt-link">${iconScrollDoc}<span>${esc(d.title || "Dvar Torah")}</span></a>`).join("")}</div>` : ""}
+        ${dts.length ? `<div class="fc-dt">${dts.map((d) => `<a href="#dvar-${d.id}" class="dt-link">${iconScrollDoc}<span>${esc(dvTitle(d))}</span></a>`).join("")}</div>` : ""}
       </div>`;
   }
   function unfav(key) {
@@ -798,7 +823,7 @@
     const s = [...n.entries()].sort((a, b) => b[1] - a[1] || ORDER.indexOf(a[0]) - ORDER.indexOf(b[0]))[0][0];
     const first = pes.find((x) => x.s === s);
     const p = first.v ? parshiotAt(s, first.c, first.v)[0] : null;
-    return p ? { s, p: p.id } : { s, c: first.c };
+    return p ? { s, ps: [p.id] } : { s, c: first.c };
   }
   let divreiOk = false;
   function divreiReady() {
@@ -807,16 +832,31 @@
     for (const d of divrei) {
       if (!d.html) { const html = plainToRich(d.text || ""), nt = textOfRich(html); d.src = remapSrc(d.text || "", nt, d.src || []); d.html = html; d.text = nt; changed = true; }
       if (!d.on) { d.on = guessOn(d.src || []); changed = true; }
+      if (d.rabbi != null && !d.rabbis) { d.rabbis = d.rabbi ? [d.rabbi] : []; delete d.rabbi; changed = true; }
+      if (d.on && d.on.p && !d.on.ps) { d.on.ps = [d.on.p]; delete d.on.p; changed = true; }
     }
     if (changed) saveDivrei();
   }
   const parshaById = (id) => INDEX.parshiot.find((p) => p.id === id);
-  function onSefer(on) { return on.s || (on.p && parshaById(on.p) ? parshaById(on.p).range[0] : ""); }
+  /* parsha tags: "vayishlach" (the parsha) or "vayishlach:h" (its haftarah) */
+  const ptagP = (t) => parshaById(String(t).split(":")[0]);
+  const ptagH = (t) => /:h$/.test(t);
+  const ptagLabel = (t) => { const p = ptagP(t); return !p ? ["", ""] : ptagH(t) ? [`Haftarah of ${p.en}`, `הפטרת ${p.he}`] : [`Parashat ${p.en}`, `פרשת ${p.he}`]; };
+  const dvRabbisOf = (d) => d.rabbis || (d.rabbi ? [d.rabbi] : []);
+  const dvPtags = (on) => (on && (on.ps || (on.p ? [on.p] : []))) || [];
+  function onSefer(on) { on = on || {}; const p = dvPtags(on).map(ptagP).find(Boolean); return on.s || (p ? p.range[0] : ""); }
+  /* a dvar Torah's title: its own, else its Rabbis, else its parshiot (one with none of these isn't saved) */
+  function dvTitle(d) {
+    if (d.title && d.title.trim()) return d.title.trim();
+    const r = dvRabbisOf(d); if (r.length) return r.join(" · ");
+    const ps = dvPtags(d.on).map((t) => ptagLabel(t)[0]).filter(Boolean); if (ps.length) return ps.join(" · ");
+    return "Dvar Torah";
+  }
   function onLabel(on) {
     on = on || {}; const en = [], he = [];
-    const p = on.p && parshaById(on.p), s = onSefer(on);
-    if (p) { en.push(`Parashat ${p.en}`); he.push(`פרשת ${p.he}`); }
-    if (s && (!p || on.c)) {
+    const tags = dvPtags(on), s = onSefer(on);
+    for (const t of tags) { const [le, lh] = ptagLabel(t); if (le) { en.push(le); he.push(lh); } }
+    if (s && (!tags.length || on.c)) {
       const b = book(s);
       if (on.c && on.v) { en.push(refEn(s, on.c, on.v)); he.push(refHe(s, on.c, on.v)); }
       else if (on.c) { en.push(`${b.en} ${on.c}`); he.push(`${b.he} ${plainGem(on.c)}`); }
@@ -830,13 +870,14 @@
     if (F.sec && !(s && book(s).section === F.sec)) return false;
     if (F.sefer && s !== F.sefer) return false;
     if (F.parsha) {
-      if (on.p) { if (on.p !== F.parsha) return false; }
-      else { const p = parshaById(F.parsha); if (!p || s !== p.range[0] || !on.c || !parshiotAt(s, on.c, on.v || 1).includes(p)) return false; }
+      const tags = dvPtags(on);
+      if (tags.length) { if (!tags.includes(F.parsha)) return false; }
+      else { if (ptagH(F.parsha)) return false; const p = parshaById(F.parsha); if (!p || s !== p.range[0] || !on.c || !parshiotAt(s, on.c, on.v || 1).includes(p)) return false; }
     }
     const c = numOf(F.c), v = numOf(F.v);
     if (c && on.c !== c) return false;
     if (v && on.v !== v) return false;
-    if (F.rabbi && (d.rabbi || "") !== F.rabbi) return false;
+    if (F.rabbi && !dvRabbisOf(d).includes(F.rabbi)) return false;
     if (F.topic && (on.topic || "") !== F.topic) return false;
     return true;
   }
@@ -845,18 +886,23 @@
     return INDEX.sections.map((sec) => `<optgroup label="${esc(sec.en)} · ${esc(sec.he)}">` +
       ORDER.filter((s) => book(s).section === sec.id).map((s) => { const n = count ? count(s) : 0; return `<option value="${s}">${esc(book(s).en)} · ${esc(book(s).he)}${n ? ` (${n})` : ""}</option>`; }).join("") + `</optgroup>`).join("");
   }
-  function parshaOptions(count, only) {
+  function parshaOptions(count, only, haft) {
     const bySefer = new Map(); for (const p of INDEX.parshiot) { if (only && p.range[0] !== only) continue; const l = bySefer.get(p.range[0]) || []; l.push(p); bySefer.set(p.range[0], l); }
+    const opt = (v, t) => { const n = count ? count(v) : 0; return `<option value="${v}">${esc(t)}${n ? ` (${n})` : ""}</option>`; };
     return [...bySefer.entries()].map(([s, ps]) => `<optgroup label="${esc(book(s).en)} · ${esc(book(s).he)}">` +
-      ps.map((p) => { const n = count ? count(p.id) : 0; return `<option value="${p.id}">${esc(p.en)} · ${esc(p.he)}${n ? ` (${n})` : ""}</option>`; }).join("") + `</optgroup>`).join("");
+      ps.map((p) => opt(p.id, `${p.en} · ${p.he}`) + (haft ? opt(p.id + ":h", `   Haftarah of ${p.en} · הפטרת ${p.he}`) : "")).join("") + `</optgroup>`).join("");
   }
   /* every source key → the divrei Torah that quote it ("p:s:c:v" for a pasuk, "c:cid:s:c:v:i" for a comment) */
   function dtIndex() {
     if (DT_INDEX) return DT_INDEX;
     DT_INDEX = new Map();
-    for (const d of divrei) for (const x of d.src || []) {
-      const keys = x.k === "c" ? [`c:${x.cid}:${x.s}:${x.c}:${x.v}:${x.i}`, `p:${x.s}:${x.c}:${x.v}`] : x.v ? [`p:${x.s}:${x.c}:${x.v}`] : [];
-      for (const k of keys) { const l = DT_INDEX.get(k) || []; if (!l.includes(d.id)) l.push(d.id); DT_INDEX.set(k, l); }
+    const put = (k, d) => { const l = DT_INDEX.get(k) || []; if (!l.includes(d.id)) l.push(d.id); DT_INDEX.set(k, l); };
+    for (const d of divrei) {
+      for (const x of d.src || []) {
+        const keys = x.k === "c" ? [`c:${x.cid}:${x.s}:${x.c}:${x.v}:${x.i}`, `p:${x.s}:${x.c}:${x.v}`] : x.v ? [`p:${x.s}:${x.c}:${x.v}`] : [];
+        for (const k of keys) put(k, d);
+      }
+      const on = d.on || {}; if (on.s && on.c && on.v) put(`p:${on.s}:${on.c}:${on.v}`, d);   // the pasuk it is on
     }
     return DT_INDEX;
   }
@@ -1114,7 +1160,7 @@
     });
   }
   const DT_F = { q: "", sec: "", sefer: "", parsha: "", c: "", v: "", rabbi: "", topic: "" };
-  const dvRabbis = () => [...new Set(divrei.map((d) => (d.rabbi || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const dvRabbis = () => [...new Set(divrei.flatMap((d) => dvRabbisOf(d).map((r) => r.trim())).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   const dvTopics = () => [...new Set(divrei.map((d) => ((d.on || {}).topic || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   function renderDivreiPage() {
     leavePages(); setPicker(null); divreiReady();
@@ -1122,7 +1168,7 @@
     const F = DT_F, app = $("#app");
     const all = divrei.slice().sort((a, b) => (b.u || b.t) - (a.u || a.t));
     const cnt = (fn) => (x) => all.filter((d) => fn(d, x)).length;
-    const opts = (vals, allT) => `<option value="">${esc(allT)}</option>` + vals.map((v) => `<option value="${esc(v)}">${esc(v)} (${all.filter((d) => (d.rabbi || "") === v || (d.on || {}).topic === v).length})</option>`).join("");
+    const opts = (vals, allT) => `<option value="">${esc(allT)}</option>` + vals.map((v) => `<option value="${esc(v)}">${esc(v)} (${all.filter((d) => dvRabbisOf(d).includes(v) || (d.on || {}).topic === v).length})</option>`).join("");
     const rabbis = dvRabbis(), topics = dvTopics();
     app.innerHTML = `<div class="saved-page">
         ${savedTabs("dt")}
@@ -1136,7 +1182,7 @@
           <div class="sp-chips" data-f="sec">${[["", "All"], ...INDEX.sections.map((s) => [s.id, s.en, s.he])].map(([v, en, he]) => `<button type="button" data-v="${v}" class="${F.sec === v ? "on" : ""}">${esc(en)}${he ? ` <span class="he">${esc(he)}</span>` : ""}</button>`).join("")}</div>
           <div class="sp-row">
             <select data-f="sefer" aria-label="On which sefer"><option value="">Every sefer</option>${seferOptions(cnt((d, s) => onSefer(d.on || {}) === s))}</select>
-            <select data-f="parsha" aria-label="On which parsha"><option value="">Every parsha</option>${parshaOptions(cnt((d, id) => onMatches(d, { parsha: id })))}</select>
+            <select data-f="parsha" aria-label="On which parsha"><option value="">Every parsha</option>${parshaOptions(cnt((d, id) => onMatches(d, { parsha: id })), null, true)}</select>
           </div>
           <div class="sp-row">
             <input data-f="c" value="${esc(F.c)}" placeholder="Perek  פרק" aria-label="Perek">
@@ -1151,7 +1197,7 @@
     $$(".sp-filters select", app).forEach((s) => { s.value = F[s.dataset.f] || ""; });
     const match = (d) => {
       if (!onMatches(d, F)) return false;
-      if (F.q) { const t = `${d.title} ${d.rabbi || ""} ${(d.on || {}).topic || ""} ${d.text}`, he = heNorm(t), en = t.toLowerCase();
+      if (F.q) { const t = `${dvTitle(d)} ${dvRabbisOf(d).join(" ")} ${(d.on || {}).topic || ""} ${d.summary ? d.summary.text : ""} ${d.text}`, he = heNorm(t), en = t.toLowerCase();
         for (const w of F.q.trim().split(/\s+/)) { if (/[א-ת]/.test(w) ? !he.includes(heNorm(w)) : !en.includes(w.toLowerCase())) return false; } }
       return true;
     };
@@ -1162,10 +1208,10 @@
       res.innerHTML = `<div class="sp-count">${hits.length} of ${all.length}</div><div class="dcards">` + hits.map((d) => {
         const [oe, oh] = onLabel(d.on), n = new Set((d.src || []).map(srcKey)).size;
         return `<a class="dcard" href="#dvar-${d.id}">
-            <div class="dc-title" dir="auto">${esc(d.title || "Dvar Torah")}</div>
-            ${d.rabbi || oe ? `<div class="dc-on">${d.rabbi ? `<span class="dc-rabbi" dir="auto">${esc(d.rabbi)}</span>` : ""}${oe ? `<span class="en">${esc(oe)}</span><span class="he">${esc(oh)}</span>` : ""}</div>` : ""}
+            <div class="dc-title" dir="auto">${esc(dvTitle(d))}</div>
+            ${dvRabbisOf(d).length || oe ? `<div class="dc-on">${dvRabbisOf(d).map((r) => `<span class="dc-rabbi" dir="auto">${esc(r)}</span>`).join("")}${oe ? `<span class="en">${esc(oe)}</span><span class="he">${esc(oh)}</span>` : ""}</div>` : ""}
             <div class="dc-date">${esc(dvarDate(d.u || d.t))} · ${n} source${n === 1 ? "" : "s"}</div>
-            <div class="dc-text" dir="auto">${esc((d.text || "").slice(0, 260))}</div>
+            <div class="dc-text" dir="auto">${esc(d.summary && d.summary.text ? d.summary.text : (d.text || "").slice(0, 260))}</div>
           </a>`; }).join("") + `</div>`;
     };
     draw();
@@ -1174,8 +1220,8 @@
     $$(".sp-filters input[data-f]", app).forEach((inp) => inp.addEventListener("input", () => { F[inp.dataset.f] = inp.value; clearTimeout(t); t = setTimeout(draw, 150); }));
     $$(".sp-filters select", app).forEach((sel) => sel.addEventListener("change", () => {
       F[sel.dataset.f] = sel.value;
-      if (sel.dataset.f === "parsha" && sel.value) { F.sefer = parshaById(sel.value).range[0]; $('.sp-filters select[data-f="sefer"]', app).value = F.sefer; }
-      if (sel.dataset.f === "sefer" && F.parsha && parshaById(F.parsha).range[0] !== sel.value) { F.parsha = ""; $('.sp-filters select[data-f="parsha"]', app).value = ""; }
+      if (sel.dataset.f === "parsha" && sel.value) { F.sefer = ptagP(sel.value).range[0]; $('.sp-filters select[data-f="sefer"]', app).value = F.sefer; }
+      if (sel.dataset.f === "sefer" && F.parsha && ptagP(F.parsha).range[0] !== sel.value) { F.parsha = ""; $('.sp-filters select[data-f="parsha"]', app).value = ""; }
       draw();
     }));
     $(".sp-chips", app).addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; F.sec = b.dataset.v; $$(".sp-chips button", app).forEach((x) => x.classList.toggle("on", x === b)); draw(); });
@@ -1200,23 +1246,25 @@
     leavePages(); setPicker(null); divreiReady();
     const d = divrei.find((x) => x.id === id), app = $("#app");
     if (!d) { app.innerHTML = `<div class="saved-page">${savedTabs("dt")}<p class="empty">That dvar Torah isn't here (it may have been deleted, or saved on another device).</p></div>`; return; }
-    document.title = `${d.title || "Dvar Torah"} — Tanach Reader`;
+    document.title = `${dvTitle(d)} — Tanach Reader`;
     const [oe, oh] = onLabel(d.on);
     app.innerHTML = `<div class="saved-page">
         ${savedTabs("dt")}
         <article class="dvar">
           <div class="dvar-top"><a href="#divrei-torah" class="dvar-back">← Divrei Torah</a>
             <span class="dvar-tools"><a href="#dvar-edit-${d.id}">Edit</a><button type="button" class="dvar-del">Delete</button></span></div>
-          <h1 dir="auto">${esc(d.title || "Dvar Torah")}</h1>
-          ${d.rabbi ? `<div class="dvar-rabbi" dir="auto">${esc(d.rabbi)}</div>` : ""}
+          <h1 dir="auto">${esc(dvTitle(d))}</h1>
+          ${dvRabbisOf(d).length ? `<div class="dvar-rabbi" dir="auto">${dvRabbisOf(d).map(esc).join(" · ")}</div>` : ""}
           ${oe ? `<div class="dvar-on"><span class="en">On ${esc(oe)}</span><span class="he">על ${esc(oh)}</span></div>` : ""}
           <div class="dvar-date">${esc(dvarDate(d.t))}${d.u && d.u !== d.t ? ` · edited ${esc(dvarDate(d.u))}` : ""}</div>
+          <section class="dvar-sum" data-id="${d.id}" hidden></section>
           <div class="dvar-body">${linkRich(d.html || plainToRich(d.text), d.src || [])}</div>
           <h2 class="dvar-sh">Sources <span class="he">מקורות</span></h2>
           <div class="dvar-srcs">${sourcesListHTML(d)}</div>
         </article>
       </div>`;
     wireDvarSources($(".dvar", app), d);
+    refreshSummary(d);
     // one saved before sources were linked whole (and meforshim only by their own words): look again, once
     if ((d.fv || 0) < 2) refindSources(d).then((ok) => { if (ok && current.view === "dvar" && current.id === id) renderDvarPage(id); });
     $(".dvar-del", app).addEventListener("click", () => {
@@ -1266,11 +1314,13 @@
           <a href="${d ? `#dvar-${d.id}` : "#divrei-torah"}" class="dvar-back">← ${d ? "Back" : "Divrei Torah"}</a>
           <h1>${d ? "Edit the dvar Torah" : "Add a dvar Torah"}</h1>
           <input id="dvTitle" type="text" placeholder="Title  כותרת" value="${esc(d ? d.title : "")}" dir="auto" aria-label="Title">
-          <input id="dvRabbi" type="text" list="dvRabbiList" placeholder="Rabbi — who said or wrote it  שם הרב" value="${esc(d && d.rabbi || "")}" dir="auto" aria-label="Rabbi" autocomplete="off">
+          <div class="tagbox" id="dvRabbis"><span class="tb-l">Rabbis <span class="he">רבנים</span></span><span class="tb-tags"></span>
+            <input type="text" list="dvRabbiList" placeholder="Add a Rabbi — who said or wrote it" dir="auto" autocomplete="off" aria-label="Add a Rabbi" enterkeyhint="done"></div>
           <datalist id="dvRabbiList">${dvRabbis().map((r) => `<option value="${esc(r)}">`).join("")}</datalist>
           <fieldset class="dv-on"><legend>What it's on <span class="he">על מה</span></legend>
+            <div class="tagbox" id="dvParshiot"><span class="tb-l">Parshiot <span class="he">פרשיות</span></span><span class="tb-tags"></span>
+              <select aria-label="Add a parsha or its haftarah"><option value="">Add a parsha…</option>${parshaOptions(null, null, true)}</select></div>
             <select id="dvSefer" aria-label="Sefer"><option value="">Sefer…</option>${seferOptions()}</select>
-            <select id="dvParsha" aria-label="Parsha"><option value="">Parsha…</option></select>
             <input id="dvPerek" placeholder="Perek" aria-label="Perek" value="${on.c ? on.c : ""}" inputmode="numeric">
             <input id="dvPasuk" placeholder="Pasuk" aria-label="Pasuk" value="${on.v ? on.v : ""}" inputmode="numeric">
             <input id="dvTopic" list="dvTopicList" placeholder="Topic or occasion (Pesach, Chanukah…)" aria-label="Topic or occasion" value="${esc(on.topic || "")}" dir="auto" autocomplete="off">
@@ -1286,15 +1336,36 @@
           <div class="dv-panel" hidden></div>
           <div id="dvText" class="dv-rich" contenteditable="true" dir="auto" role="textbox" aria-multiline="true" aria-label="The dvar Torah" data-ph="Paste the dvar Torah here — Hebrew, English or both. Bold and italics from Word, GoodNotes or a web page are kept. The pesukim and meforshim it quotes are found and linked by themselves.">${d ? d.html || plainToRich(d.text) : ""}</div>
           <div class="dv-status" aria-live="polite"></div>
-          <div class="dv-btns"><button type="button" class="dv-save" disabled>Save</button></div>
+          <div class="dv-btns"><button type="button" class="dv-save" disabled>Save</button><span class="dv-need" hidden>Add a title, a Rabbi or a parsha to save it.</span></div>
           <div class="dv-found"></div>
         </div>
       </div>`;
-    const ed = $("#dvText"), save = $(".dv-save"), box = $(".dv-found"), sef = $("#dvSefer"), par = $("#dvParsha"), panel = $(".dv-panel"), status = $(".dv-status");
-    const fillParsha = () => { const s = sef.value; par.innerHTML = `<option value="">Parsha…</option>` + parshaOptions(null, s && book(s).section === "torah" ? s : s ? "-" : null); par.disabled = !!s && !INDEX.parshiot.some((p) => p.range[0] === s); };
-    sef.value = onSefer(on) || ""; fillParsha(); par.value = on.p || "";
-    sef.addEventListener("change", () => { const keep = par.value; fillParsha(); if (keep && parshaById(keep).range[0] === sef.value) par.value = keep; $(".dv-onnote").hidden = true; });
-    par.addEventListener("change", () => { if (par.value) { const s = parshaById(par.value).range[0]; if (sef.value !== s) { sef.value = s; const keep = par.value; fillParsha(); par.value = keep; } } $(".dv-onnote").hidden = true; });
+    const ed = $("#dvText"), save = $(".dv-save"), box = $(".dv-found"), sef = $("#dvSefer"), panel = $(".dv-panel"), status = $(".dv-status");
+    sef.value = on.s || "";
+    sef.addEventListener("change", () => { $(".dv-onnote").hidden = true; });
+    // Rabbis and parshiot are tags: as many as it has; a parsha's tag can add its haftarah
+    let rabbis = d ? dvRabbisOf(d).slice() : [], ptags = dvPtags(on).slice();
+    const canSave = () => !!ed.textContent.trim() && !!($("#dvTitle").value.trim() || rabbis.length || ptags.length);
+    const upd = () => { save.disabled = !canSave(); $(".dv-need").hidden = !(ed.textContent.trim() && save.disabled); };
+    const drawTags = () => {
+      $("#dvRabbis .tb-tags").innerHTML = rabbis.map((r, i) => `<span class="tag" dir="auto">${esc(r)}<button type="button" data-rr="${i}" aria-label="Remove ${esc(r)}">×</button></span>`).join("");
+      $("#dvParshiot .tb-tags").innerHTML = ptags.map((t, i) => { const [le, lh] = ptagLabel(t), p = ptagP(t);
+        return `<span class="tag${ptagH(t) ? " haft" : ""}"><span>${esc(le.replace(/^Parashat /, ""))}</span> <span class="he">${esc(lh)}</span>${!ptagH(t) && !ptags.includes(p.id + ":h") ? `<button type="button" class="tag-h" data-ph="${p.id}">＋ Haftarah</button>` : ""}<button type="button" data-pr="${i}" aria-label="Remove">×</button></span>`; }).join("");
+      upd();
+    };
+    const addRabbi = (inp) => { const v = inp.value.replace(/[,،]+$/, "").trim(); if (v && !rabbis.includes(v)) rabbis.push(v); inp.value = ""; drawTags(); };
+    const rin = $("#dvRabbis input");
+    rin.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === ",") { e.preventDefault(); addRabbi(rin); } });
+    rin.addEventListener("change", () => addRabbi(rin));
+    $("#dvRabbis").addEventListener("click", (e) => { const b = e.target.closest("[data-rr]"); if (b) { rabbis.splice(+b.dataset.rr, 1); drawTags(); } else if (e.target === e.currentTarget) rin.focus(); });
+    const addPtag = (t) => { if (!t || ptags.includes(t)) return; ptags.push(t); if (!sef.value) sef.value = ptagP(t).range[0]; $(".dv-onnote").hidden = true; drawTags(); };
+    $("#dvParshiot select").addEventListener("change", (e) => { addPtag(e.target.value); e.target.value = ""; });
+    $("#dvParshiot").addEventListener("click", (e) => {
+      const h = e.target.closest("[data-ph]"); if (h) { addPtag(h.dataset.ph + ":h"); return; }
+      const r = e.target.closest("[data-pr]"); if (r) { ptags.splice(+r.dataset.pr, 1); drawTags(); }
+    });
+    $("#dvTitle").addEventListener("input", upd);
+    drawTags();
     // the text as the finder sees it (the editor's own DOM), its sources and mentions in the same offsets
     let live = richText(ed), src = [], mentions = [], rejected = new Set(d && d.rej || []), busy = 0, dirty = false, timer = 0;
     if (d) src = remapSrc(d.text || "", live.text, d.src || []).map((x) => Object.assign(x, { q: live.text.slice(x.a, x.b) }));
@@ -1326,16 +1397,16 @@
       live = richText(ed); src = relocate(r.src, live.text); mentions = r.mentions.filter((x) => live.text.slice(x.a, x.b) === x.q);
       dirty = false; status.textContent = src.length ? `${new Set(src.map(srcKey)).size} source${new Set(src.map(srcKey)).size === 1 ? "" : "s"} linked` + (mentions.length ? ` · ${mentions.length} to link` : "") : mentions.length ? `${mentions.length} to link` : "No sources found yet";
       showFound();
-      if (!sef.value && !par.value && !$("#dvTopic").value.trim()) {
+      if (!sef.value && !ptags.length && !$("#dvTopic").value.trim()) {
         const g = guessOn(src);
-        if (g.s) { sef.value = g.s; fillParsha(); par.value = g.p || ""; $("#dvPerek").value = g.c || ""; $(".dv-onnote").hidden = false; }
+        if (g.s) { sef.value = g.s; ptags = (g.ps || []).slice(); $("#dvPerek").value = g.c || ""; $(".dv-onnote").hidden = false; drawTags(); }
       }
     };
     const changed = () => {
-      dirty = true; save.disabled = !ed.textContent.trim(); clearTimeout(timer); timer = setTimeout(detect, 700);
+      dirty = true; upd(); clearTimeout(timer); timer = setTimeout(detect, 700);
       live = richText(ed); src = relocate(src, live.text); mentions = relocate(mentions, live.text); paint();
     };
-    save.disabled = !d; if (d) detect(); else showFound();
+    upd(); if (d) detect(); else showFound();
     wireRichEditor(ed, changed);
     $(".dv-tools", app).addEventListener("mousedown", (e) => { if (e.target.closest("[data-cmd], .dv-linksel")) e.preventDefault(); });
     $(".dv-tools", app).addEventListener("click", (e) => { const b = e.target.closest("[data-cmd]"); if (!b) return; ed.focus(); document.execCommand(b.dataset.cmd); changed(); });
@@ -1394,7 +1465,7 @@
           x.q = live.text.slice(a, b);
           src = src.filter((y) => !(y.a < b && a < y.b)).concat([x]).sort((p, q) => p.a - q.a);
           mentions = mentions.filter((y) => !(y.a < b && a < y.b));
-          panel.hidden = true; panel.innerHTML = ""; showFound(); save.disabled = !ed.textContent.trim(); toast("Linked");
+          panel.hidden = true; panel.innerHTML = ""; showFound(); upd(); toast("Linked");
         }
       };
       panel.onchange = (e) => {
@@ -1408,7 +1479,7 @@
     $(".dv-linksel", app).addEventListener("click", () => { if (selAB) openPicker(selAB[0], selAB[1]); });
     box.addEventListener("click", (e) => {
       const r = e.target.closest(".dv-rm");
-      if (r) { const x = src[+r.dataset.n]; if (!x.m) rejected.add(`${srcKey(x)}|${live.text.slice(x.a, x.b)}`); src.splice(+r.dataset.n, 1); showFound(); save.disabled = !ed.textContent.trim(); return; }
+      if (r) { const x = src[+r.dataset.n]; if (!x.m) rejected.add(`${srcKey(x)}|${live.text.slice(x.a, x.b)}`); src.splice(+r.dataset.n, 1); showFound(); upd(); return; }
       const l = e.target.closest(".dv-linkm");
       if (l) { const x = mentions[+l.dataset.n]; openPicker(x.a, x.b, x.kind === "c" ? { cid: x.cid } : {}); }
     });
@@ -1473,25 +1544,95 @@
       live = richText(ed);
       const html = sanitizeRich(ed.innerHTML), text = textOfRich(html);
       const s2 = remapSrc(live.text, text, src).map((x) => { const o = Object.assign({}, x); delete o.q; return o; });
-      const now = Date.now(), title = $("#dvTitle").value.trim() || text.trim().split("\n")[0].slice(0, 70);
-      const onv = { s: sef.value || "", p: par.value || "", c: numOf($("#dvPerek").value), v: numOf($("#dvPasuk").value), topic: $("#dvTopic").value.trim() };
-      Object.keys(onv).forEach((k) => { if (!onv[k]) delete onv[k]; });
-      const rec = { title, rabbi: $("#dvRabbi").value.trim(), on: onv, html, text, src: s2, rej: [...rejected], fv: 2, u: now };
+      if (rin.value.trim()) addRabbi(rin);
+      if (!canSave()) { upd(); toast("Add a title, a Rabbi or a parsha first"); return; }
+      const now = Date.now(), title = $("#dvTitle").value.trim();
+      const onv = { s: sef.value || "", ps: ptags.slice(), c: numOf($("#dvPerek").value), v: numOf($("#dvPasuk").value), topic: $("#dvTopic").value.trim() };
+      Object.keys(onv).forEach((k) => { if (!onv[k] || (Array.isArray(onv[k]) && !onv[k].length)) delete onv[k]; });
+      const oldText = d ? d.text : null;
+      const rec = { title, rabbis: rabbis.slice(), on: onv, html, text, src: s2, rej: [...rejected], fv: 2, u: now };
+      if (d) delete d.rabbi;
       let x;
       if (d) { Object.assign(d, rec); x = d; }
       else { x = Object.assign({ id: now.toString(36) + Math.random().toString(36).slice(2, 6), t: now }, rec); divrei.push(x); }
       if (window.CSS && CSS.highlights) ["dvsrc", "dvman", "dvmention"].forEach((k) => CSS.highlights.delete(k));
+      if (oldText !== text) delete x.summary;
       saveDivrei(); toast("Dvar Torah saved"); location.hash = `#dvar-${x.id}`;
+      if (!x.summary) makeSummary(x);                 // an AI summary, where this site can ask Claude (inside Claude)
     });
   }
   /* a pasuk you select in Scroll that a dvar Torah of yours quotes: a link to it, under the pasuk */
-  function dtChip(row) {
-    $$(".dt-chip").forEach((x) => x.remove());
-    if (!row || !divrei.length) return;
-    const s = row.dataset.s, c = +row.dataset.c, v = +row.dataset.v;
-    const ds = dtLinksFor([`p:${s}:${c}:${v}`]); if (!ds.length) return;
-    row.insertAdjacentHTML("beforeend", `<div class="dt-chip no-copy">${ds.map((d) => `<a href="#dvar-${d.id}">${iconScrollDoc}<span>${esc(d.title || "Dvar Torah")}</span></a>`).join("")}</div>`);
+  function dtChip() {}                                   // (chips are now drawn with every pasuk: dtChipHTML)
+  function dtChipHTML(s, c, v) {
+    if (!divrei.length) return "";
+    const ds = dtLinksFor([`p:${s}:${c}:${v}`]); if (!ds.length) return "";
+    return `<div class="dt-chip no-copy">${ds.map((d) => `<button type="button" data-dt="${d.id}" title="A dvar Torah on this pasuk — tap for its summary">${iconScrollDoc}<span>${esc(dvTitle(d))}</span></button>`).join("")}</div>`;
   }
+  /* ── AI summaries: written by Claude where this site can ask it (opened inside Claude: the artifact's "sample"
+     capability), kept with the dvar Torah (d.summary) and shown on its page and in the popup from a pasuk ── */
+  const SUM_BUSY = new Set();
+  let SAMPLE = null;
+  async function getSample() {
+    if (SAMPLE !== null) return SAMPLE;
+    try { SAMPLE = window.claude && typeof window.claude.use === "function" ? (await window.claude.use("sample")) || false : false; } catch { SAMPLE = false; }
+    return SAMPLE;
+  }
+  async function makeSummary(d) {
+    if (!d || SUM_BUSY.has(d.id) || !(d.text || "").trim()) return false;
+    const sample = await getSample(); if (!sample) return false;
+    SUM_BUSY.add(d.id); refreshSummary(d);
+    const [oe] = onLabel(d.on), rb = dvRabbisOf(d);
+    const prompt = `Summarise this dvar Torah for someone deciding whether to read it.
+Write 2 to 4 sentences: the question or difficulty it starts from, the idea or answer it gives, and the main sources it brings (pesukim, meforshim, Chazal). Write in the language the dvar Torah is mostly written in (English or Hebrew), using names as it does. No heading, no preamble, no bullet points.
+
+Title: ${dvTitle(d)}${rb.length ? `\nRabbi: ${rb.join(", ")}` : ""}${oe ? `\nOn: ${oe}` : ""}
+--- the dvar Torah ---
+${d.text.slice(0, 16000)}`;
+    try {
+      const r = await sample(prompt, { modelTier: "quick" });
+      const t = (r && r.text || "").trim();
+      if (t) { d.summary = { text: t, t: Date.now() }; saveDivrei(); }
+    } catch (e) {
+      if (e && e.code === "rate_limited") toast("Too many requests just now — try the summary again in a minute");
+      else if (e && e.code === "not_granted") SAMPLE = false;
+    } finally { SUM_BUSY.delete(d.id); refreshSummary(d); }
+    return true;
+  }
+  function summaryHTML(d, can) {
+    if (SUM_BUSY.has(d.id)) return `<div class="ds-h">Summary <span class="ai">AI</span></div><p class="ds-wait">Writing a summary…</p>`;
+    if (d.summary && d.summary.text) return `<div class="ds-h">Summary <span class="ai">AI</span>${can ? `<button type="button" class="ds-make" data-id="${d.id}">Write again</button>` : ""}</div><p dir="auto">${esc(d.summary.text)}</p>`;
+    if (can) return `<button type="button" class="ds-make ds-first" data-id="${d.id}">Write an AI summary</button>`;
+    return "";
+  }
+  async function refreshSummary(d) {
+    const can = !!(await getSample());
+    for (const el of $$(`.dvar-sum[data-id="${d.id}"]`)) { el.innerHTML = summaryHTML(d, can); el.hidden = !el.innerHTML; }
+  }
+  document.addEventListener("click", (e) => { const b = e.target.closest(".ds-make"); if (!b) return; const d = divrei.find((x) => x.id === b.dataset.id); if (d) makeSummary(d); });
+  /* the popup from a pasuk's chip: each dvar Torah on it — title, Rabbis, what it's on, its summary — and a way in */
+  function dvarPopup(ids) {
+    closeDvarPopup();
+    const ds = ids.map((id) => divrei.find((x) => x.id === id)).filter(Boolean); if (!ds.length) return;
+    const pop = document.createElement("div"); pop.className = "dt-pop"; pop.setAttribute("role", "dialog"); pop.setAttribute("aria-label", "Dvar Torah");
+    pop.innerHTML = `<div class="dtp-card">
+        <button type="button" class="dtp-x" aria-label="Close">${iconX}</button>
+        ${ds.map((d) => { const [oe, oh] = onLabel(d.on);
+          return `<div class="dtp-one">
+            <div class="dtp-t" dir="auto">${esc(dvTitle(d))}</div>
+            ${dvRabbisOf(d).length && dvTitle(d) !== dvRabbisOf(d).join(" · ") ? `<div class="dtp-r" dir="auto">${dvRabbisOf(d).map(esc).join(" · ")}</div>` : ""}
+            ${oe ? `<div class="dtp-on"><span class="en">${esc(oe)}</span> <span class="he">${esc(oh)}</span></div>` : ""}
+            <div class="dvar-sum" data-id="${d.id}"></div>
+            ${d.summary ? "" : `<p class="dtp-open" dir="auto">${esc((d.text || "").slice(0, 260))}${(d.text || "").length > 260 ? "…" : ""}</p>`}
+            <a class="dtp-go" href="#dvar-${d.id}">Read the dvar Torah →</a>
+          </div>`; }).join("")}
+      </div>`;
+    document.body.append(pop);
+    ds.forEach((d) => refreshSummary(d));
+    pop.addEventListener("click", (e) => { if (e.target === pop || e.target.closest(".dtp-x") || e.target.closest(".dtp-go")) closeDvarPopup(); });
+  }
+  function closeDvarPopup() { $$(".dt-pop").forEach((x) => x.remove()); }
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDvarPopup(); });
+  document.addEventListener("click", (e) => { const b = e.target.closest(".dt-chip [data-dt], .pg-dt"); if (!b) return; e.preventDefault(); e.stopPropagation(); dvarPopup((b.dataset.dts || b.dataset.dt).split(",")); }, true);
 
   /* ── Find in Scroll — the top bar's search box (or Ctrl / ⌘ F): the pesukim of this sefer (or this parsha) whose
      Hebrew (vowels and cantillation don't matter) or English has what you type; Enter or › goes to the next ── */
@@ -1600,6 +1741,7 @@
 
     app.innerHTML = `
       <div class="home">
+        <div class="home-date heb-date" dir="rtl" aria-label="Today's Hebrew date"></div>
         <section class="hero">
           <h1>תנ״ך</h1>
           <p class="sub">Torah<span class="dot">·</span>Nevi'im<span class="dot">·</span>Ketuvim</p>
@@ -1652,7 +1794,7 @@
             </section>`).join("")}
         </div>
       </div>`;
-    renderWeek();
+    renderWeek(); showHebDate();
     renderContinue(last);
     renderSaved();
     $$("[data-book]", app).forEach((b) => b.addEventListener("click", () => openPicker(b.dataset.book)));
@@ -1661,13 +1803,57 @@
     window.scrollTo(0, 0);
   }
 
+  /* ── the Hebrew date as it is in Israel: a new day begins at nightfall — sunset in Jerusalem (the usual almanac
+     sunrise/sunset equation) and about 20 minutes. Shown beside the logo and at the top of Home, and it decides when
+     "This week" moves on: once Shabbat goes out, the next week's parsha. ── */
+  const IL_LAT = 31.778, IL_LON = 35.235;
+  const ilYMD = (t) => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jerusalem", year: "numeric", month: "2-digit", day: "2-digit" }).format(t);
+  const addDay = (ymd, n) => { const d = new Date(ymd + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  function sunsetUTC(ymd) {
+    const [y, m, dd] = ymd.split("-").map(Number), rad = Math.PI / 180;
+    const N = Math.round((Date.UTC(y, m - 1, dd) - Date.UTC(y, 0, 0)) / 864e5), lngHour = IL_LON / 15, t = N + (18 - lngHour) / 24;
+    const M = 0.9856 * t - 3.289;
+    let L = (M + 1.916 * Math.sin(M * rad) + 0.020 * Math.sin(2 * M * rad) + 282.634 + 720) % 360;
+    let RA = (Math.atan(0.91764 * Math.tan(L * rad)) / rad + 720) % 360;
+    RA = (RA + Math.floor(L / 90) * 90 - Math.floor(RA / 90) * 90) / 15;
+    const sinDec = 0.39782 * Math.sin(L * rad), cosDec = Math.cos(Math.asin(sinDec));
+    const cosH = (Math.cos(90.833 * rad) - sinDec * Math.sin(IL_LAT * rad)) / (cosDec * Math.cos(IL_LAT * rad));
+    const H = Math.acos(Math.max(-1, Math.min(1, cosH))) / rad / 15;
+    const UT = ((H + RA - 0.06571 * t - 6.622 - lngHour) % 24 + 24) % 24;
+    return Date.UTC(y, m - 1, dd) + UT * 36e5;
+  }
+  const nightfall = (ymd) => sunsetUTC(ymd) + 20 * 6e4;
+  /* the civil date (in Israel) whose Hebrew day it is now: after nightfall, tomorrow's */
+  function hebCivil(now = new Date()) { const ymd = ilYMD(now); return now.getTime() >= nightfall(ymd) ? addDay(ymd, 1) : ymd; }
+  function hebDateText(ymd, withYear = true) {
+    try {
+      const parts = new Intl.DateTimeFormat("he-u-ca-hebrew", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }).formatToParts(new Date(ymd + "T12:00:00Z"));
+      const get = (t) => (parts.find((p) => p.type === t) || {}).value || "";
+      const num = (v, mod) => (/^\d+$/.test(v) ? gematria(mod ? +v % mod : +v) : v);
+      const month = get("month").replace(/^ב(?=[א-ת])/, "");
+      if (!month || /^\d/.test(month)) return "";
+      return `${num(get("day"))} ${month}${withYear ? " " + num(get("year"), 1000) : ""}`;
+    } catch { return ""; }
+  }
+  let HEB_SHOWN = "";
+  function showHebDate() {
+    const ymd = hebCivil(), long = hebDateText(ymd), short = hebDateText(ymd, false);
+    const night = ymd !== ilYMD(new Date());
+    for (const el of $$(".heb-date")) { el.textContent = el.classList.contains("hd-short") ? short : long; el.title = night ? `${long} (from nightfall)` : long; }
+    if (HEB_SHOWN && HEB_SHOWN !== ymd && current && current.view === "home") renderWeek();   // Shabbat went out: the next week's parsha
+    HEB_SHOWN = ymd;
+  }
+  setInterval(showHebDate, 6e4); setTimeout(showHebDate, 0);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) showHebDate(); });
+
   /* this week's parsha, by the Israeli calendar (data/shabbat-il.json, built with Hebcal) */
   async function renderWeek() {
     const slot = $("#weekSlot"); if (!slot) return;
     let cal; try { cal = await fetchJSON("data/shabbat-il.json"); } catch { const s = $("#weekSec"); if (s) s.remove(); return; }
     if (!slot.isConnected) return;
-    const d = new Date(), today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    const i = cal.findIndex((x) => x[0] >= today); if (i < 0) { $("#weekSec").remove(); return; }
+    // the coming Shabbat by the Hebrew day: on Motzaei Shabbat (after nightfall) it is already next week's
+    const today = ilYMD(new Date()), hday = hebCivil();
+    const i = cal.findIndex((x) => x[0] >= hday); if (i < 0) { $("#weekSec").remove(); return; }
     const [date, hdate, ids, holEn, holHe] = cal[i];
     const civil = new Date(date + "T12:00").toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
     const hd = hdate.replace(RE_NIKKUD, "");
@@ -1947,6 +2133,10 @@
   }
   function commUnits(heHtml, enHtml, al) {
     const { heDH, heRest, enDH, enRest } = commParts(heHtml, enHtml), H = { dh: heDH };
+    if (al && al.cl) {                                    // Claude's translation: each Hebrew phrase has its own English
+      const hu = (heDH ? [heDH] : []).concat(splitPhrases(heRest, "he"));
+      if (hu.length === al.cl.length) return hu.map((h, k) => (k === 0 && heDH ? { dh: true, he: h, en: al.cl[k], html: `<b>${esc(al.cl[k])}</b>` } : { he: h, heDH: "", en: al.cl[k], html: esc(al.cl[k]) }));
+    }
     if (al && enHtml) { const u = unitsFromAlign(al, heDH, heRest, enDH, enRest); if (u) return u; }
     const rows = alignComment(heRest, enRest);
     const ens = boldSeq(rows.map((rw) => rw.en.join(" ")));
@@ -2119,7 +2309,7 @@
     return { top, body: commentaryBody(s, c, v, reg) };
   }
   function pgTools(s, c, v) {
-    return `<span class="pg-tools"><button type="button" class="pg-bm ${isBookmarked(s, c, v) ? "on" : ""}" data-s="${s}" data-c="${c}" data-v="${v}" aria-label="Bookmark" title="Bookmark">${iconBookmark}</button><button type="button" class="pg-fav ${isFav(s, c, v) ? "on" : ""}" data-s="${s}" data-c="${c}" data-v="${v}" aria-pressed="${isFav(s, c, v)}" aria-label="Favourite" title="Favourite">${iconStar}</button><button type="button" class="pg-copy" aria-label="Copy this pasuk" title="Copy this pasuk">${iconCopy}</button><button type="button" class="pg-pick ${picks.has(pickKey(s, c, v)) ? "on" : ""}" data-s="${s}" data-c="${c}" data-v="${v}" aria-pressed="${picks.has(pickKey(s, c, v))}" title="Select this pasuk to copy with others"><svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><rect x="3" y="3" width="14" height="14" rx="3.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path class="tick" d="M6.5 10.2l2.4 2.4 4.6-5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg><span>${picks.has(pickKey(s, c, v)) ? "Selected" : "Select"}</span></button></span>`;
+    return `<span class="pg-tools"><button type="button" class="pg-bm ${isBookmarked(s, c, v) ? "on" : ""}" data-s="${s}" data-c="${c}" data-v="${v}" aria-label="Bookmark" title="Bookmark">${iconBookmark}</button><button type="button" class="pg-fav ${isFav(s, c, v) ? "on" : ""}" data-s="${s}" data-c="${c}" data-v="${v}" aria-pressed="${isFav(s, c, v)}" aria-label="Favourite" title="Favourite">${iconStar}</button>${(() => { const ds = divrei.length ? dtLinksFor([`p:${s}:${c}:${v}`]) : []; return ds.length ? `<button type="button" class="pg-dt" data-dts="${ds.map((d) => d.id).join(",")}" title="${ds.length === 1 ? "A dvar Torah" : ds.length + " divrei Torah"} on this pasuk" aria-label="Divrei Torah on this pasuk">${iconScrollDoc}${ds.length > 1 ? `<span>${ds.length}</span>` : ""}</button>` : ""; })()}<button type="button" class="pg-copy" aria-label="Copy this pasuk" title="Copy this pasuk">${iconCopy}</button><button type="button" class="pg-pick ${picks.has(pickKey(s, c, v)) ? "on" : ""}" data-s="${s}" data-c="${c}" data-v="${v}" aria-pressed="${picks.has(pickKey(s, c, v))}" title="Select this pasuk to copy with others"><svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><rect x="3" y="3" width="14" height="14" rx="3.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path class="tick" d="M6.5 10.2l2.4 2.4 4.6-5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg><span>${picks.has(pickKey(s, c, v)) ? "Selected" : "Select"}</span></button></span>`;
   }
   function commentaryBody(s, c, v, reg) {
     let body = "";
@@ -2127,7 +2317,8 @@
       const list = at(resolved.get(commUrl(cm.id, s)), c, v); if (!list.length) continue;
       const enl = at(resolved.get(commEnUrl(cm.id, s)), c, v);
       body += `<h3 class="pg-cname"><span class="he">${cm.he}</span><span class="en">${esc(cm.en)}</span></h3>
-        ${list.map((x, i) => `<div class="pg-c cu" data-anchor="c:${cm.id}:${i}" data-kind="comm" data-cid="${cm.id}" data-s="${s}" data-c="${c}" data-v="${v}" data-i="${i}"><div class="cu-he">${phrasedComment(x, enl[i] || "", reg, cm.enSrc ? `${cm.en} · ${cm.enSrc}` : cm.en, alignOf(cm.id, s, c, v, i))}</div></div>`).join("")}`;
+        ${list.map((x, i) => { const al = alignOf(cm.id, s, c, v, i);
+          return `<div class="pg-c cu" data-anchor="c:${cm.id}:${i}" data-kind="comm" data-cid="${cm.id}" data-s="${s}" data-c="${c}" data-v="${v}" data-i="${i}"><div class="cu-he">${phrasedComment(x, enl[i] || "", reg, al && al.cl ? `${cm.en} · translated by Claude` : cm.enSrc ? `${cm.en} · ${cm.enSrc}` : cm.en, al)}</div></div>`; }).join("")}`;
     }
     return body || `<p class="pg-none">אין פירוש על פסוק זה</p>`;
   }
@@ -3087,6 +3278,7 @@
         </span>
       </div>
       <div class="v-en cu-en">${en}</div>
+      ${dtChipHTML(slug, c, v)}
     </div>`;
   }
 
@@ -4424,7 +4616,7 @@
   const DL_KINDS = () => [
     { id: "text", en: "Tanach text", sub: "Hebrew + English", he: "מקרא", files: (s) => [`data/text/${s}.json`, "data/search/he.json", "data/translit.json"] },
     ...COMMENTARIES.map((c) => ({ id: c.id, en: c.en, sub: c.note ? `with English · ${c.note} only` : "with English", he: c.he,
-      files: (s) => avail(c, s) ? [c.dir + s + ".json", c.enDir && c.enDir + s + ".json", c.introDir && INDEX.intros && (INDEX.intros[c.id] || []).includes(s) && c.introDir + s + ".json", hasAlign(c.id, s) && alignUrl(c.id, s)].filter(Boolean) : [] })),
+      files: (s) => avail(c, s) ? [c.dir + s + ".json", c.enDir && c.enDir + s + ".json", c.introDir && INDEX.intros && (INDEX.intros[c.id] || []).includes(s) && c.introDir + s + ".json", hasAlign(c.id, s) && alignUrl(c.id, s), hasCl(c.id, s) && clUrl(c.id, s)].filter(Boolean) : [] })),
   ];
   const filesFor = (slugs, kinds) => {
     const man = OFF.man ? OFF.man.files : {}, out = new Set();
