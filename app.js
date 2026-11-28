@@ -279,6 +279,7 @@
   async function route() {
     if (!INDEX) return;                     // index still loading: boot() routes when it's ready
     const tok = ++routeTok;
+    setTimeout(showBack, 0);                // (views that return early below have set `current` by then)
     if (veilUp && !layoutSwitch) veilTo(false, 120);   // a change of view cut short by this one
     const r = parseRoute(location.hash);
     // opening anything from the Home page opens it in Scroll
@@ -326,7 +327,10 @@
     else if (r.view === "chapter" || r.view === "parsha") work = renderReader(r);
     else renderNotFound();
     const toTop = r.view !== "chapter" && r.view !== "parsha";
-    if (toTop) { window.scrollTo(0, 0); if (work) work = Promise.resolve(work).then((x) => { if (tok === routeTok) window.scrollTo(0, 0); return x; }); }
+    const backAt = toTop ? backY : null; backY = null;
+    if (toTop) { window.scrollTo(0, backAt || 0); if (work) work = Promise.resolve(work).then((x) => { if (tok === routeTok) window.scrollTo(0, backAt || 0); return x; }); }
+    if (backAt) requestAnimationFrame(() => { if (tok === routeTok) window.scrollTo(0, backAt); });
+    showBack();
     if (veil) {
       if (work) await Promise.all([Promise.race([work, sleep(900)]), fontsReady(settings.view === "pages" ? "pages" : "scroll", 900)]);
       await frames(2); if (tok === routeTok) await veilTo(false, 170);
@@ -376,8 +380,42 @@
       <a href="#favourites" class="${on === "fav" ? "on" : ""}">${iconStar}<span class="en">Favourites</span><span class="he">מועדפים</span></a>
       <a href="#divrei-torah" class="${on === "dt" ? "on" : ""}">${iconScrollDoc}<span class="en">Divrei Torah</span><span class="he">דברי תורה</span></a>
     </nav>`;
+  /* ← Back: following a link (a source in a dvar Torah, a favourite, a dvar Torah from a pasuk) leaves a button to
+     return to the exact place it was followed from */
+  let BACK = null, backY = null;
+  function noteBack() {
+    if (!current) return;
+    const v = current.view;
+    let label = null;
+    if (v === "dvar") { const d = divrei.find((x) => x.id === current.id); label = d ? `Back to “${dvTitle(d)}”` : "Back to the dvar Torah"; }
+    else if (v === "favourites") label = "Back to favourites";
+    else if (v === "divrei") label = "Back to divrei Torah";
+    else if (v === "chapter" || v === "parsha") { const r = parseRoute(location.hash); label = r && r.slug && INDEX.books[r.slug] ? `Back to ${r.v ? refEn(r.slug, r.c, r.v) : `${book(r.slug).en} ${r.c || 1}`}` : "Back"; }
+    if (!label) return;
+    BACK = { hash: location.hash || "#", y: window.scrollY, label, from: v };
+  }
+  // a dvar Torah opened from a pasuk, a favourite or a list leaves the way back too
+  document.addEventListener("click", (e) => {
+    const a = e.target.closest && e.target.closest('a[href^="#dvar-"]');
+    if (a && !/^#dvar-(new|edit)/.test(a.getAttribute("href")) && current && /^(chapter|parsha|favourites)$/.test(current.view)) noteBack();
+  }, true);
+  function showBack() {
+    let b = document.getElementById("backPill");
+    const on = !!BACK && current && current.view !== BACK.from && current.view !== "home";
+    document.body.classList.toggle("has-back", on);
+    if (!on) { if (b) b.hidden = true; if (BACK && current && current.view === "home") BACK = null; return; }
+    if (!b) {
+      b = document.createElement("button"); b.type = "button"; b.id = "backPill"; b.className = "back-pill";
+      b.addEventListener("click", () => { const k = BACK; if (!k) return; BACK = null; b.hidden = true; document.body.classList.remove("has-back"); backY = k.y; if (location.hash === k.hash) route(); else location.hash = k.hash; });
+      $(".topbar .brand").after(b);                       // in the top bar, beside the logo
+    }
+    b.innerHTML = `<span aria-hidden="true">←</span> <span class="bp-t" dir="auto">${esc(BACK.label)}</span><span class="bp-s">Back</span>`;
+    b.title = BACK.label;
+    b.hidden = false;
+  }
   /* opening a source from these pages: Scroll (a meforash other than Rashi only shows in Pages) */
   function openSource(x) {
+    noteBack();
     if (x.kind === "intro" || x.k === "i") {
       settings.view = "pages"; saveSettings();
       pendingPgIntro = { s: x.s, key: x.parsha ? x.key : "sefer", parsha: x.parsha || null, anchor: `i:${x.cid}:${x.key}:${x.p}` };
@@ -1463,7 +1501,7 @@
       const ment = mentions.map((x, n) => `<div class="dt-srow ment"><span class="dv-q" dir="auto">“${esc(x.q)}”</span> <span class="dv-tag">${x.kind === "c" ? esc(commMeta(x.cid).en) + " — which comment?" : "which pasuk?"}</span>
           <button type="button" class="dv-linkm" data-n="${n}">Link…</button></div>`).join("");
       box.innerHTML = (src.length ? `<h2 class="dvar-sh">Linked · ${new Set(src.map(srcKey)).size} source${new Set(src.map(srcKey)).size === 1 ? "" : "s"} <span class="he">מקורות</span></h2><p class="dv-note">Found as you paste or type; remove any that isn't right, or select words and link them yourself.</p>${rows}` : "")
-        + (mentions.length ? `<h2 class="dvar-sh">Not linked yet</h2><p class="dv-note">These name a source without quoting it — link each to the pasuk or comment it means.</p>${ment}` : "");
+        + (mentions.length ? `<h2 class="dvar-sh">Not linked yet</h2><p class="dv-note">These name a source without quoting it — tap the word in the text (marked red), or Link… here, to link it to the pasuk or comment it means.</p>${ment}` : "");
       paint();
     };
     const detect = async () => {
@@ -1501,6 +1539,17 @@
       } else if (s.rangeCount && ed.contains(s.getRangeAt(0).commonAncestorContainer)) selAB = null;   // a click elsewhere in the text
       $(".dv-linksel").disabled = !selAB;
     });
+    // the picker opens as a sheet at the foot of the screen, the words it links marked and kept in view above it
+    const closePanel = () => { panel.hidden = true; panel.innerHTML = ""; if (window.CSS && CSS.highlights) CSS.highlights.delete("dvpick"); };
+    const revealPick = (a, b) => {
+      const r = rangeAt(ed, live.nodes, a, b); if (!r) return;
+      if (window.CSS && CSS.highlights && typeof Highlight !== "undefined") CSS.highlights.set("dvpick", new Highlight(r));
+      requestAnimationFrame(() => {
+        const rc = r.getBoundingClientRect(), top = (parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--topbar-h")) || 56) + 12, bottom = window.innerHeight - panel.offsetHeight - 16;
+        if (rc.bottom > bottom) window.scrollBy({ top: rc.bottom - bottom, behavior: "smooth" });
+        else if (rc.top < top) window.scrollBy({ top: rc.top - top, behavior: "smooth" });
+      });
+    };
     const openPicker = (a, b, pre = {}) => {
       const t = live.text, near = src.filter((x) => x.b <= a && x.v).sort((x, y) => y.b - x.b)[0] || src.find((x) => x.v);
       const P = { k: pre.cid ? "c" : pre.k || "p", s: pre.s || (near && near.s) || sef.value || "genesis", c: pre.c || (near && near.c) || numOf($("#dvPerek").value) || 1, v: pre.v || (near && near.v) || numOf($("#dvPasuk").value) || 1, cid: pre.cid || "rashi", i: null, key: null, list: [] };
@@ -1562,7 +1611,7 @@
         const k = e.target.closest("[data-k]"); if (k && !k.disabled) { readCV(); P.k = k.dataset.k; P.i = null; P.key = null; drawAll(); return; }
         const c1 = e.target.closest(".dvp-c1");
         if (c1) { if (c1.dataset.key != null) P.key = c1.dataset.key; else P.i = +c1.dataset.i; $$(".dvp-c1", panel).forEach((x) => x.classList.toggle("on", x === c1)); $(".dvp-ok", panel).disabled = false; return; }
-        if (e.target.closest(".dvp-x")) { panel.hidden = true; panel.innerHTML = ""; return; }
+        if (e.target.closest(".dvp-x")) { closePanel(); return; }
         if (e.target.closest(".dvp-ok")) {
           let x;
           if (P.k === "i") { const sec = P.list.find((y) => y.key === P.key); if (!sec) return; x = { k: "i", s: P.s, cid: P.cid, key: sec.key, parsha: sec.parsha || null, c: sec.c || null, t: [sec.en || "Introduction", sec.he || "הקדמה"], a, b, m: 1 }; }
@@ -1570,7 +1619,7 @@
           x.q = live.text.slice(a, b);
           src = src.filter((y) => !(y.a < b && a < y.b)).concat([x]).sort((p, q) => p.a - q.a);
           mentions = mentions.filter((y) => !(y.a < b && a < y.b));
-          panel.hidden = true; panel.innerHTML = ""; showFound(); upd(); toast("Linked");
+          closePanel(); showFound(); upd(); toast("Linked");
         }
       };
       let typing = 0;
@@ -1585,8 +1634,16 @@
         if (e.target.matches(".dvp-m")) { P.cid = e.target.value; P.i = null; P.key = null; drawShow(); return; }
         if (e.target.matches(".dvp-c, .dvp-v")) { clearTimeout(typing); readCV(); P.i = null; drawShow(); }
       };
-      panel.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      revealPick(a, b);
     };
+    // a name the finder marked to link ("Rashi", "the pasuk says") is linked by tapping it in the text
+    ed.addEventListener("click", () => {
+      const sel = getSelection(); if (!sel.rangeCount || !sel.isCollapsed) return;
+      live = richText(ed);
+      const at = offsetOf(ed, live.nodes, sel.anchorNode, sel.anchorOffset); if (at == null) return;
+      const m = mentions.find((x) => at >= x.a && at <= x.b); if (!m) return;
+      openPicker(m.a, m.b, m.kind === "c" ? { cid: m.cid } : {});
+    });
     $(".dv-linksel", app).addEventListener("click", () => { if (selAB) openPicker(selAB[0], selAB[1]); });
     box.addEventListener("click", (e) => {
       const r = e.target.closest(".dv-rm");
@@ -1666,7 +1723,7 @@
       let x;
       if (d) { Object.assign(d, rec); x = d; }
       else { x = Object.assign({ id: now.toString(36) + Math.random().toString(36).slice(2, 6), t: now }, rec); divrei.push(x); }
-      if (window.CSS && CSS.highlights) ["dvsrc", "dvman", "dvmention"].forEach((k) => CSS.highlights.delete(k));
+      if (window.CSS && CSS.highlights) ["dvsrc", "dvman", "dvmention", "dvpick"].forEach((k) => CSS.highlights.delete(k));
       if (oldText !== text) delete x.summary;
       saveDivrei(); toast("Dvar Torah saved"); location.hash = `#dvar-${x.id}`;
       if (!x.summary) makeSummary(x);                 // an AI summary, where this site can ask Claude (inside Claude)

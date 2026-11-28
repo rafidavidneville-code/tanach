@@ -1184,6 +1184,9 @@ body.finding .nav-center { visibility: hidden; }
 .dv-linksel:disabled { opacity: .45; cursor: default; }
 .dv-tools .dv-linksel, .dv-tools .dv-tlit { font-size: .88rem; }
 .dv-panel { border: 1px solid var(--rule); border-radius: 12px; background: var(--card); padding: 10px 12px; }
+/* opens as a sheet at the foot of the screen, over the text, wherever the words being linked are */
+.dv-panel:not([hidden]) { position: fixed; z-index: 70; left: 0; right: 0; bottom: 0; max-height: 72vh; overflow: auto; border-radius: 16px 16px 0 0; border-bottom: 0; box-shadow: 0 -10px 34px rgba(0,0,0,.18); padding: 14px max(16px, calc((100vw - 760px) / 2)) calc(14px + env(safe-area-inset-bottom)); }
+::highlight(dvpick) { background-color: color-mix(in srgb, #2f6fb5 30%, transparent); }
 .dv-pick { display: grid; gap: 8px; }
 .dv-pq { font-size: .95rem; color: var(--ink); }
 .dv-prow { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -1250,3 +1253,12 @@ body.finding .nav-center { visibility: hidden; }
 .tag .tag-h { font-size: .78rem; color: var(--accent); border: 1px solid currentColor; border-radius: 999px; padding: 1px 7px; }
 .tagbox input, .tagbox select { flex: 1 1 160px; min-width: 140px; border: 0 !important; background: transparent !important; padding: 6px 4px !important; font: inherit; color: var(--ink); outline: none; }
 .dv-need { font-size: .85rem; color: #a8423f; align-self: center; }
+
+/* ← Back to where a link was followed from — in the top bar, beside the logo */
+.back-pill { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 1; min-width: 0; max-width: min(34vw, 340px); margin-left: 10px; padding: 6px 13px 6px 10px; border: 1px solid var(--rule); border-radius: 999px; background: var(--card); color: var(--accent); font: inherit; font-size: .86rem; cursor: pointer; }
+.back-pill[hidden] { display: none; }
+.back-pill .bp-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.back-pill .bp-s { display: none; }
+.back-pill:hover { border-color: var(--gold); }
+body.has-back .brand .brand-en, body.has-back .brand .heb-date { display: none; }
+@media (max-width: 560px) { .back-pill { margin-left: 6px; padding: 5px 10px 5px 8px; } .back-pill .bp-t { display: none; } .back-pill .bp-s { display: inline; } }
