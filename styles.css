@@ -1176,3 +1176,27 @@ body.finding .nav-center { visibility: hidden; }
 @media (max-width: 480px) { body.scroll-reader .fav-link, body.pages-mode .fav-link { display: none; } }
 .sp-tabs a .en, .sp-tabs a .he { white-space: nowrap; }
 @media (max-width: 480px) { .sp-tabs a .he { display: none; } }
+/* dvar Torah editor: sources found (gold), linked by hand (green), named but not linked yet (rose) */
+::highlight(dvsrc) { background-color: color-mix(in srgb, var(--gold) 30%, transparent); }
+::highlight(dvman) { background-color: color-mix(in srgb, #3f9a6b 26%, transparent); }
+::highlight(dvmention) { background-color: color-mix(in srgb, #c0504d 22%, transparent); }
+.dv-status { font-size: .85rem; color: var(--ink-3); min-height: 1.2em; }
+.dv-linksel:disabled { opacity: .45; cursor: default; }
+.dv-tools .dv-linksel, .dv-tools .dv-tlit { font-size: .88rem; }
+.dv-panel { border: 1px solid var(--rule); border-radius: 12px; background: var(--card); padding: 10px 12px; }
+.dv-pick { display: grid; gap: 8px; }
+.dv-pq { font-size: .95rem; color: var(--ink); }
+.dv-prow { display: flex; flex-wrap: wrap; gap: 6px; }
+.dv-prow select, .dv-prow input { padding: 8px 10px; border: 1px solid var(--rule); border-radius: 8px; background: var(--paper, var(--card)); color: var(--ink); font: inherit; font-size: .95rem; }
+.dv-prow input { width: 5.5em; }
+.dvp-show { display: grid; gap: 6px; max-height: 46vh; overflow: auto; }
+.dvp-pasuk { font-family: var(--f-he); font-size: 1.1rem; line-height: 1.6; }
+.dvp-c1 { text-align: right; direction: rtl; font-family: var(--f-he); font-size: 1rem; line-height: 1.5; padding: 8px 10px; border: 1px solid var(--rule-2); border-radius: 8px; background: transparent; color: var(--ink); cursor: pointer; }
+.dvp-c1.on { border-color: var(--gold); background: color-mix(in srgb, var(--gold) 14%, transparent); }
+.dvt-list { display: grid; gap: 4px; max-height: 46vh; overflow: auto; }
+.dvt-row { display: flex; align-items: center; gap: 8px; font-size: .95rem; }
+.dvt-row .he { font-family: var(--f-he); font-size: 1.05rem; }
+.dv-tag { font-size: .78rem; color: var(--ink-3); }
+.dt-srow.man .dv-q { color: #2f7d55; }
+.dt-srow.ment .dv-q { color: #a8423f; }
+.dv-linkm { padding: 4px 10px; border: 1px solid var(--rule); border-radius: 8px; background: var(--card); color: var(--ink-2); font: inherit; font-size: .85rem; cursor: pointer; margin-inline-start: auto; }

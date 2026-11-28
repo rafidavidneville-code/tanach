@@ -860,17 +860,21 @@
     }
     return DT_INDEX;
   }
-  /* finding what a dvar Torah quotes:
+  /* finding what a dvar Torah quotes — done by itself as it is pasted or typed:
        • references — בראשית א, ב · (שמות כ:ב) · Bereshit 1:2 · Genesis 1:2 · Gen. 1:2 · Shemot 20 …
-       • the words of a pasuk quoted in Hebrew (three or more running together, letters only), matched against every
-         pasuk of Tanach (data/search/he.json)
-       • a meforash named next to a pasuk (רש״י, the Ramban, Ibn Ezra …): his comment on it — the one whose words are
-         quoted, if any are; and any comment on a pasuk it mentions whose words it quotes, named or not */
+       • the words of a pasuk quoted in Hebrew, matched against every pasuk of Tanach (data/search/he.json), and linked
+         whole: out to its quotation marks, on through the pasuk's next words (with or without ו/י, a prefix letter),
+         its "וגו'", and the reference written beside it
+       • a meforash only where his own words are quoted — words of a comment after its dibbur hamatchil that aren't
+         the pasuk's (a dibbur hamatchil alone is the pasuk); his name just before them is part of the link
+       • "Rashi says", "the pasuk says", "כתב הרמב"ן" … with nothing to link to are returned as mentions, for the person
+         to link by hand (as they can any words they select). Links made by hand (m: 1) are kept as they are. */
   const MEF_NAMES = [
     ["rashi", /רש["״]?י|\bRashi\b/g], ["ramban", /(?:ה)?רמב["״]?ן|\bRamban\b|Nachmanides/g], ["ibnezra", /(?:ה)?אבן עזרא|ראב["״]?ע|\bIbn Ezra\b/g],
-    ["bachya", /רבינו בחיי|רבנו בחיי|\bBachya\b|\bBechaye\b/g], ["sforno", /(?:ה)?ספורנו|\bS[fp]orno\b/g], ["kliyakar", /(?:ה)?כלי יקר|\bK[e]?li Yakar\b/g],
-    ["orhachaim", /(?:ה)?אור החיים|\bO[h]?r Ha[Cc]haim\b|\bOr HaChayim\b/g], ["beishalevi", /(?:ה)?בית הלוי|\bBei[ts] HaLevi\b/g],
+    ["bachya", /רבינו בחיי|רבנו בחיי|\bBachya\b|\bBechaye\b/g], ["sforno", /(?:ה)?ספורנו|\bSe?[fp]orno\b/g], ["kliyakar", /(?:ה)?כלי יקר|\bK[e]?li Yakar\b/g],
+    ["orhachaim", /(?:ה)?אור החיים|\bO[h]?r Ha[Cc]ha[iy]+m\b/g], ["beishalevi", /(?:ה)?בית הלוי|\bBei[ts] HaLevi\b/g],
   ];
+  const PASUK_SAYS = /(?:ה)?(?:פסוק|כתוב|נביא|תורה)\s+(?:אומר|אומרת|כותב|כותבת|מספר|מספרת)|כתוב בתורה|שנאמר|דכתיב|כדכתיב|כמו שכתוב|כמ["״]ש|\b(?:the\s+)?(?:pasuk|passuk|possuk|posuk|verse|navi|prophet|torah|chumash)\s+(?:says|states|writes|tells us|teaches|describes|relates)\b|\bas (?:it|the verse) (?:says|states|is written|is stated)\b/gi;
   function heTokens(text) {
     const out = []; const re = /[א-ת][א-ת֑-ׇ"'״׳]*/g; let m;
     while ((m = re.exec(text))) {
@@ -879,13 +883,36 @@
       w = w.replace(/["'״׳]/g, "");
       if (godName || w === "יקוק" || w === "יהוה" || w === "ה") w = "יהוה";
       else if (/^(אלקים|אלוקים|אלוהים)$/.test(w)) w = "אלהים";
-      out.push({ w, a: m.index, b: m.index + m[0].length });
+      // a quotation mark closing a quote is not part of the word (gershayim always stand before a word's last letter)
+      out.push({ w, a: m.index, b: m.index + m[0].length - (/["״]$/.test(m[0]) ? 1 : 0) });
     }
     return out;
   }
-  async function findSources(text) {
+  const SKEL = (w) => w.replace(/[וי]/g, "");
+  const PFX = /^[והבלמכש]/;
+  const sameWord = (a, b) => a === b || SKEL(a) === SKEL(b) || (a.length > 2 && PFX.test(a) && SKEL(a.slice(1)) === SKEL(b)) || (b.length > 2 && PFX.test(b) && SKEL(a) === SKEL(b.slice(1)));
+  const ETC = new Set(["וגו", "וגומר", "וכו", "וכולי", "וגומ"]);
+  /* a quotation is linked whole: if quotation marks are just around what was found, out to them */
+  function toQuoteMarks(text, a, b) {
+    const OPEN = /["“„״‘]/, CLOSE = /["”״’]/;
+    let i = a - 1; while (i >= 0 && a - i <= 40 && text[i] !== "\n") {
+      const ch = text[i];
+      if (CLOSE.test(ch) && !OPEN.test(ch)) break;
+      if (OPEN.test(ch) && (i === 0 || /[\s(\[:,–—-]/.test(text[i - 1]))) break;
+      i--;
+    }
+    if (i < 0 || a - i > 40 || text[i] === "\n" || !(OPEN.test(text[i]) && (i === 0 || /[\s(\[:,–—-]/.test(text[i - 1])))) return [a, b];
+    let j = CLOSE.test(text[b - 1] || "") ? b - 1 : b; while (j < text.length && j - b <= 120 && text[j] !== "\n") {
+      if (CLOSE.test(text[j]) && (j + 1 >= text.length || !/[א-תA-Za-z]/.test(text[j + 1]))) return [i, j + 1];
+      j++;
+    }
+    return [a, b];
+  }
+  async function findSources(text, opt = {}) {
+    const keep = opt.keep || [], rejected = opt.rejected || new Set();
     const found = [];                                  // {k: "p"|"c", s, c, v, cid, i, a, b}
     const HE = await fetchJSON("data/search/he.json").catch(() => null);
+    const pasukWords = (s, c, v) => (HE && HE[s] && HE[s][c - 1] && HE[s][c - 1][v - 1]) || "";
     // 1. references
     const bookPat = [];
     for (const [s, b] of Object.entries(INDEX.books)) { bookPat.push([b.he.replace(/["״׳']/g, ""), s]); }
@@ -905,7 +932,6 @@
     while ((m = enRef.exec(text))) {
       const q = ((m[1] || "") + m[2]).trim();
       const k = q.toLowerCase().replace(/[^a-z0-9]/g, ""), n = normEnBook(q);
-      // an abbreviation the site knows (Gen., Ex., Ps.), or four letters or more of a sefer's name (Bereshit, Genesis, Shmuel I)
       const books = findBooks(q).filter((s) => ABBR[n] === s || (k.length >= 4 && (bookKeys(s).some((f) => f.startsWith(k)) || s.startsWith(n))));
       const s = books[0]; if (!s) continue;
       const c = +m[3], v = m[4] ? +m[4] : null;
@@ -913,10 +939,13 @@
       if (v && !(v >= 1 && v <= book(s).verses[c - 1])) continue;
       found.push({ k: "p", s, c, v, a: m.index, b: m.index + m[0].length, ref: true });
     }
-    // 2. quoted pesukim (Hebrew) — the words of a reference (בראשית א, ב) don't count as quoted words
+    // (inside parentheses a reference is part of the link: "(בראשית א, ג)")
+    for (const f of found) { if (text[f.a - 1] === "(" && /^\s*\)/.test(text.slice(f.b))) { f.a--; f.b = text.indexOf(")", f.b) + 1; } }
+    // 2. quoted pesukim (Hebrew) — the words of a reference don't count as quoted words
     const refSpans = found.slice();
     const T = heTokens(text).map((t) => (refSpans.some((f) => t.a >= f.a && t.b <= f.b) ? Object.assign(t, { w: "\u0000" + t.w }) : t));
     const usable = (t) => t && t.w[0] !== "\u0000";
+    const taken = new Array(T.length).fill(false);
     if (HE && T.length >= 3) {
       const tri = new Map();
       for (let i = 0; i + 2 < T.length; i++) { if (!usable(T[i]) || !usable(T[i + 1]) || !usable(T[i + 2])) continue; const k = `${T[i].w} ${T[i + 1].w} ${T[i + 2].w}`; (tri.get(k) || tri.set(k, []).get(k)).push(i); }
@@ -928,93 +957,132 @@
           const hits = tri.get(`${W[j]} ${W[j + 1]} ${W[j + 2]}`); if (!hits) continue;
           for (const i of hits) {
             let n = 3; while (i + n < T.length && j + n < W.length && T[i + n].w === W[j + n]) n++;
-            if (j > 0 && i > 0 && T[i - 1].w === W[j - 1]) continue;        // counted from where the run starts
-            cands.push({ s, c: ci + 1, v: vi + 1, i, n, letters: T.slice(i, i + n).reduce((t, x) => t + x.w.length, 0), whole: n === W.length });
+            if (j > 0 && i > 0 && T[i - 1].w === W[j - 1]) continue;
+            cands.push({ s, c: ci + 1, v: vi + 1, i, j, n, W, letters: T.slice(i, i + n).reduce((t, x) => t + x.w.length, 0), whole: n === W.length });
           }
         }
       }));
       const refSefarim = new Set(found.map((f) => f.s)), refPesukim = new Set(found.filter((f) => f.v).map((f) => `${f.s}:${f.c}:${f.v}`));
-      // the longest runs first; a run found in several pesukim goes to one the text names, or isn't linked
       const byStart = new Map();
       for (const x of cands) { if (x.letters < 9) continue; const k = `${x.i}:${x.n}`; (byStart.get(k) || byStart.set(k, []).get(k)).push(x); }
       const runs = [...byStart.values()].sort((a, b) => b[0].n - a[0].n);
-      const taken = new Array(T.length).fill(false);
       for (const group of runs) {
-        const { i, n } = group[0];
+        let { i, n } = group[0];
         if (taken.slice(i, i + n).some(Boolean)) continue;
         let pick = null;
         if (group.length === 1) pick = group[0];
         else pick = group.find((x) => refPesukim.has(`${x.s}:${x.c}:${x.v}`)) || (group.filter((x) => refSefarim.has(x.s)).length === 1 ? group.find((x) => refSefarim.has(x.s)) : null) || (group.length <= 2 && n >= 6 ? group[0] : null);
-        // three words are enough only for a whole short pasuk, a sefer the text names, or long words
         if (!pick || (n < 4 && !pick.whole && !refSefarim.has(pick.s) && pick.letters < 14)) continue;
+        // the whole quotation: on through the pasuk's words before and after, written with or without ו/י or a prefix
+        let j = pick.j; const W = pick.W;
+        while (i > 0 && j > 0 && usable(T[i - 1]) && !taken[i - 1] && sameWord(T[i - 1].w, W[j - 1]) && T[i].a - T[i - 1].b <= 3) { i--; j--; n++; }
+        while (i + n < T.length && j + n < W.length && usable(T[i + n]) && !taken[i + n] && sameWord(T[i + n].w, W[j + n]) && T[i + n].a - T[i + n - 1].b <= 3) n++;
+        if (i + n < T.length && ETC.has(T[i + n].w) && T[i + n].a - T[i + n - 1].b <= 2) n++;
         for (let t = i; t < i + n; t++) taken[t] = true;
-        found.push({ k: "p", s: pick.s, c: pick.c, v: pick.v, a: T[i].a, b: T[i + n - 1].b, quote: true });
+        const [a, b] = toQuoteMarks(text, T[i].a, T[i + n - 1].b + (/^['׳]/.test(text.slice(T[i + n - 1].b)) ? 1 : 0));
+        found.push({ k: "p", s: pick.s, c: pick.c, v: pick.v, a, b, quote: true });
       }
     }
-    // 3. meforshim: named beside a pasuk, and their words quoted
+    // 3. meforshim — only their own words: what a comment says after its dibbur hamatchil, and not the pasuk's words
     const pes = found.filter((f) => f.k === "p" && f.v);
     const sefarim = [...new Set(pes.map((f) => f.s))].slice(0, 4);
     const avail = (cid, s) => (INDEX.comm[cid] || []).includes(s);
     await Promise.allSettled(sefarim.flatMap((s) => COMMENTARIES.filter((cm) => avail(cm.id, s)).map((cm) => loadComm(cm.id, s))));
-    const commTokens = (cid, s, c, v) => { const d = resolved.get(commUrl(cid, s)); return d ? at(d, c, v).map((h) => heTokens(htmlToText(h)).map((x) => x.w)) : []; };
-    const quoteIn = (toks, from, to, ok) => {  // the longest run of the dvar Torah's words (within from..to) in a comment
+    const bodyTokens = (cid, s, c, v) => { const d = resolved.get(commUrl(cid, s)); return d ? at(d, c, v).map((h) => heTokens(htmlToText(commParts(h, "").heRest)).map((x) => x.w)) : []; };
+    const inPesukim = (s, c, v, run) => { const q = " " + run + " "; for (let dv = -1; dv <= 1; dv++) if ((" " + pasukWords(s, c, v + dv) + " ").includes(q)) return true; return false; };
+    const quoteIn = (toks, from, to, s, c, v, min) => {
       let best = null;
       for (let i = 0; i < T.length; i++) {
-        if (T[i].a < from || T[i].a > to || !usable(T[i])) continue;
+        if (T[i].a < from || T[i].a > to || !usable(T[i]) || taken[i]) continue;
         for (let j = 0; j < toks.length; j++) {
           if (toks[j] !== T[i].w) continue;
-          let n = 1; while (i + n < T.length && j + n < toks.length && T[i + n].w === toks[j + n]) n++;
+          let n = 1; while (i + n < T.length && j + n < toks.length && !taken[i + n] && sameWord(T[i + n].w, toks[j + n])) n++;
           const letters = T.slice(i, i + n).reduce((t, x) => t + x.w.length, 0);
-          if (n >= 3 && letters >= 9 && (!best || n > best.n) && (!ok || ok({ i, n }))) best = { i, n };
+          if (n >= min && letters >= 9 && (!best || n > best.n) && !inPesukim(s, c, v, T.slice(i, i + n).map((x) => x.w).join(" "))) best = { i, j, n };
         }
       }
       return best;
     };
-    // words a comment shares with the pasuk it is on are the pasuk's (the comment quoting its pasuk), not the comment's
-    const inPasuk = (p, q) => { const W = HE && HE[p.s] && HE[p.s][p.c - 1] && HE[p.s][p.c - 1][p.v - 1]; return !!W && (" " + W + " ").includes(" " + T.slice(q.i, q.i + q.n).map((x) => x.w).join(" ") + " "); };
+    const named = [];
     for (const [cid, re] of MEF_NAMES) {
       if (!COMMENTARIES.some((cm) => cm.id === cid)) continue;
       re.lastIndex = 0;
       while ((m = re.exec(text))) {
-        const at0 = m.index;
-        // the pasuk he is speaking about: the nearest one named or quoted before him in the same paragraph, else just after
+        const at0 = m.index, at1 = at0 + m[0].length;
         const para0 = text.lastIndexOf("\n\n", at0) + 1, para1 = (text.indexOf("\n\n", at0) + 1 || text.length + 1) - 1;
         const before = pes.filter((f) => f.b <= at0 && f.a >= para0).sort((x, y) => y.b - x.b)[0];
         const after = pes.filter((f) => f.a >= at0 && f.a <= Math.min(para1, at0 + 160)).sort((x, y) => x.a - y.a)[0];
-        // his comment: the one (on that pasuk or one near it) whose words are quoted after his name; with none
-        // quoted, his first comment on the pasuk itself
         let best = null;
         for (const q of [before, after].filter(Boolean)) for (let dv = -2; dv <= 2; dv++) {
           const v = q.v + dv; if (v < 1 || v > book(q.s).verses[q.c - 1] || !avail(cid, q.s)) continue;
-          commTokens(cid, q.s, q.c, v).forEach((toks, i) => {
-            const qq = quoteIn(toks, at0, Math.min(para1, at0 + 1200), (r) => !inPasuk({ s: q.s, c: q.c, v }, r));
-            const sc = (qq ? qq.n * 10 : 0) - Math.abs(dv) - (q === before ? 0 : .5);
-            if (!best || sc > best.sc) best = { s: q.s, c: q.c, v, i, q: qq && sc > 0 ? qq : null, sc };
+          bodyTokens(cid, q.s, q.c, v).forEach((toks, i) => {
+            const qq = quoteIn(toks, at0, Math.min(para1, at0 + 1200), q.s, q.c, v, 3);
+            if (!qq) return;
+            const sc = qq.n * 10 - Math.abs(dv) - (q === before ? 0 : .5) - (T[qq.i].a - at1) / 200;
+            if (!best || sc > best.sc) best = { s: q.s, c: q.c, v, i, q: qq, sc };
           });
         }
-        if (!best || (!best.q && best.v !== (before || after).v)) continue;
-        found.push({ k: "c", cid, s: best.s, c: best.c, v: best.v, i: best.i, a: at0, b: at0 + m[0].length, named: true });
-        if (best.q) found.push({ k: "c", cid, s: best.s, c: best.c, v: best.v, i: best.i, a: T[best.q.i].a, b: T[best.q.i + best.q.n - 1].b, quote: true, named: true });
+        if (!best) { named.push({ cid, a: at0, b: at1 }); continue; }
+        const { q } = best;
+        let n = q.n; const toks = bodyTokens(cid, best.s, best.c, best.v)[best.i];
+        while (q.i + n < T.length && q.j + n < toks.length && !taken[q.i + n] && sameWord(T[q.i + n].w, toks[q.j + n])) n++;
+        for (let t = q.i; t < q.i + n; t++) taken[t] = true;
+        let [a, b] = toQuoteMarks(text, T[q.i].a, T[q.i + n - 1].b);
+        if (a - at1 <= 120 && !/\n/.test(text.slice(at1, a))) a = at0;               // "ופירש רש״י …quoted words…" is one link
+        found.push({ k: "c", cid, s: best.s, c: best.c, v: best.v, i: best.i, a, b, quote: true, named: true });
       }
     }
-    // quoted comments on the pesukim it speaks of, even unnamed (four or more words)
+    // quoted comments on the pesukim it speaks of, even unnamed (four or more of the comment's own words)
     for (const p of pes) for (const cm of COMMENTARIES) {
       if (!avail(cm.id, p.s)) continue;
-      commTokens(cm.id, p.s, p.c, p.v).forEach((toks, i) => {
-        const q = quoteIn(toks, 0, text.length, (r) => r.n >= 4 && !inPasuk(p, r));
-        if (q && !found.some((f) => f.k === "c" && f.a <= T[q.i].a && f.b >= T[q.i + q.n - 1].b))
-          found.push({ k: "c", cid: cm.id, s: p.s, c: p.c, v: p.v, i, a: T[q.i].a, b: T[q.i + q.n - 1].b, quote: true });
+      bodyTokens(cm.id, p.s, p.c, p.v).forEach((toks, i) => {
+        const q = quoteIn(toks, 0, text.length, p.s, p.c, p.v, 4);
+        if (!q) return;
+        for (let t = q.i; t < q.i + q.n; t++) taken[t] = true;
+        const [a, b] = toQuoteMarks(text, T[q.i].a, T[q.i + q.n - 1].b);
+        found.push({ k: "c", cid: cm.id, s: p.s, c: p.c, v: p.v, i, a, b, quote: true });
       });
     }
-    // one link per stretch of text: a comment over the pasuk it is on; the longer over the shorter
-    found.sort((x, y) => x.a - y.a || (y.b - y.a) - (x.b - x.a));
-    const out = [];
-    for (const f of found) {
+    // a reference written right beside its quotation is one link with it: "(בראשית א, ג) ויאמר אלהים יהי אור"
+    const sameSrc = (x, y) => x.k === y.k && x.s === y.s && x.c === y.c && (x.k === "c" ? x.cid === y.cid && x.i === y.i && x.v === y.v : (x.v === y.v || !x.v || !y.v));
+    found.sort((x, y) => x.a - y.a);
+    for (let t = 0; t + 1 < found.length; t++) {
+      const x = found[t], y = found[t + 1];
+      if (y.a >= x.b && /^[\s,.:;()\[\]–—"“”״-]{0,6}$/.test(text.slice(x.b, y.a)) && (sameSrc(x, y) || (x.ref && y.k === "c" && y.s === x.s && y.c === x.c && (!x.v || x.v === y.v)) || (y.ref && x.k === "c" && x.s === y.s && x.c === y.c && (!y.v || y.v === x.v)))) {
+        const z = x.ref ? y : x; found.splice(t, 2, Object.assign({}, z, { a: x.a, b: y.b, v: z.v || x.v || y.v })); t--;
+      }
+    }
+    // one link per stretch of text: a link made by hand first; a comment over the pasuk it is on; the longer over the shorter
+    const auto = found.filter((f) => !rejected.has(`${srcKey(f)}|${text.slice(f.a, f.b)}`));
+    auto.sort((x, y) => x.a - y.a || (y.b - y.a) - (x.b - x.a));
+    const out = keep.map((x) => Object.assign({}, x));
+    for (const f of auto) {
       const o = out.find((x) => f.a < x.b && x.a < f.b);
       if (!o) { out.push(f); continue; }
-      if (f.k === "c" && o.k === "p" && f.s === o.s && f.c === o.c && f.v === o.v) { out.splice(out.indexOf(o), 1, f); }
+      if (!o.m && f.k === "c" && o.k === "p" && f.s === o.s && f.c === o.c && f.v === o.v) out.splice(out.indexOf(o), 1, f);
     }
-    return out.map(({ k, s, c, v, cid, i, a, b }) => (k === "c" ? { k, s, c, v, cid, i, a, b } : { k, s, c, v, a, b }));
+    out.sort((x, y) => x.a - y.a);
+    // what names a source without one to link: "Rashi says", "the pasuk says", "כתב הרמב״ן"
+    const covered = (a, b) => out.some((x) => a < x.b + 2 && x.a < b + 60 && x.a >= a - 2);
+    const mentions = named.filter((x) => !out.some((y) => x.a < y.b && y.a < x.b)).map((x) => ({ kind: "c", cid: x.cid, a: x.a, b: x.b }));
+    PASUK_SAYS.lastIndex = 0;
+    while ((m = PASUK_SAYS.exec(text))) { const a = m.index, b = a + m[0].length; if (!covered(a, b) && !out.some((y) => a < y.b && y.a < b)) mentions.push({ kind: "p", a, b }); }
+    mentions.sort((x, y) => x.a - y.a);
+    return {
+      src: out.map((x) => { const o = x.k === "c" ? { k: "c", s: x.s, c: x.c, v: x.v, cid: x.cid, i: x.i, a: x.a, b: x.b } : { k: "p", s: x.s, c: x.c, v: x.v, a: x.a, b: x.b }; if (x.m) o.m = 1; o.q = text.slice(x.a, x.b); return o; }),
+      mentions: mentions.map((x) => Object.assign(x, { q: text.slice(x.a, x.b) })),
+    };
+  }
+  /* links made by hand follow their words when the text around them changes; ones whose words are gone are dropped */
+  function relocate(list, text) {
+    const out = [];
+    for (const x of list) {
+      if (text.slice(x.a, x.b) === x.q) { out.push(x); continue; }
+      let best = -1, d = Infinity, p = text.indexOf(x.q);
+      while (p >= 0) { if (Math.abs(p - x.a) < d) { d = Math.abs(p - x.a); best = p; } p = text.indexOf(x.q, p + 1); }
+      if (best >= 0 && x.q) out.push(Object.assign({}, x, { a: best, b: best + x.q.length }));
+    }
+    return out;
   }
   const srcKey = (x) => (x.k === "c" ? `c:${x.cid}:${x.s}:${x.c}:${x.v}:${x.i}` : `p:${x.s}:${x.c}:${x.v || ""}`);
   function srcLabel(x) {
@@ -1149,10 +1217,18 @@
         </article>
       </div>`;
     wireDvarSources($(".dvar", app), d);
+    // one saved before sources were linked whole (and meforshim only by their own words): look again, once
+    if ((d.fv || 0) < 2) refindSources(d).then((ok) => { if (ok && current.view === "dvar" && current.id === id) renderDvarPage(id); });
     $(".dvar-del", app).addEventListener("click", () => {
       if (!confirmInline($(".dvar-del", app), "Delete it? Tap again")) return;
       divrei = divrei.filter((x) => x.id !== id); saveDivrei(); toast("Dvar Torah deleted"); location.hash = "#divrei-torah";
     });
+  }
+  async function refindSources(d) {
+    try {
+      const r = await findSources(d.text || "", { keep: (d.src || []).filter((x) => x.m).map((x) => Object.assign({}, x, { q: (d.text || "").slice(x.a, x.b) })), rejected: new Set(d.rej || []) });
+      d.src = r.src.map((x) => { const o = Object.assign({}, x); delete o.q; return o; }); d.fv = 2; saveDivrei(); return true;
+    } catch (e) { return false; }
   }
   /* a destructive button asks once more on itself instead of a dialog */
   function confirmInline(btn, label) {
@@ -1161,6 +1237,24 @@
     setTimeout(() => { delete btn.dataset.armed; btn.textContent = old; btn.classList.remove("armed"); }, 3500);
     return false;
   }
+  /* where text offsets of the editor are in its DOM, and back (for highlights and for linking a selection) */
+  function rangeAt(root, nodes, a, b) {
+    const pos = (x, end) => {
+      for (let k = 0; k < nodes.length; k++) { const [n, st] = nodes[k], en = st + n.data.length; if (end ? x <= en && x > st : x < en && x >= st) return [n, x - st]; }
+      return null;
+    };
+    const s = pos(a, false), e = pos(b, true); if (!s || !e) return null;
+    const r = document.createRange(); r.setStart(s[0], s[1]); r.setEnd(e[0], e[1]); return r;
+  }
+  function offsetOf(root, nodes, node, off) {
+    if (node.nodeType === 3) { const f = nodes.find((x) => x[0] === node); return f ? f[1] + Math.min(off, node.data.length) : null; }
+    const kid = node.childNodes[off];                    // an element and a child's place: the first text from there on
+    for (const [n, st] of nodes) {
+      if (kid ? kid === n || kid.contains(n) || (kid.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_FOLLOWING) : !node.contains(n) && (node.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_FOLLOWING)) return st;
+    }
+    const last = nodes[nodes.length - 1]; return last ? last[1] + last[0].data.length : 0;
+  }
+  let TRANSLIT = null;
   function renderDvarEdit(id) {
     leavePages(); setPicker(null); divreiReady();
     const d = id ? divrei.find((x) => x.id === id) : null, app = $("#app");
@@ -1177,55 +1271,188 @@
           <fieldset class="dv-on"><legend>What it's on <span class="he">על מה</span></legend>
             <select id="dvSefer" aria-label="Sefer"><option value="">Sefer…</option>${seferOptions()}</select>
             <select id="dvParsha" aria-label="Parsha"><option value="">Parsha…</option></select>
-            <input id="dvPerek" placeholder="Perek" aria-label="Perek" value="${on.c ? on.c : ""}">
-            <input id="dvPasuk" placeholder="Pasuk" aria-label="Pasuk" value="${on.v ? on.v : ""}">
+            <input id="dvPerek" placeholder="Perek" aria-label="Perek" value="${on.c ? on.c : ""}" inputmode="numeric">
+            <input id="dvPasuk" placeholder="Pasuk" aria-label="Pasuk" value="${on.v ? on.v : ""}" inputmode="numeric">
             <input id="dvTopic" list="dvTopicList" placeholder="Topic or occasion (Pesach, Chanukah…)" aria-label="Topic or occasion" value="${esc(on.topic || "")}" dir="auto" autocomplete="off">
             <datalist id="dvTopicList">${dvTopics().map((r) => `<option value="${esc(r)}">`).join("")}</datalist>
             <p class="dv-note dv-onnote" hidden>Filled in from its sources — change it if it's on something else.</p>
           </fieldset>
           <div class="dv-tools" role="toolbar" aria-label="Formatting">
             <button type="button" data-cmd="bold" aria-label="Bold"><b>B</b></button><button type="button" data-cmd="italic" aria-label="Italic"><i>I</i></button><button type="button" data-cmd="underline" aria-label="Underline"><u>U</u></button>
+            <button type="button" class="dv-linksel" disabled title="Select words in the text, then link them to a pasuk or a meforash">🔗 Link the selected words</button>
+            <button type="button" class="dv-tlit" title="Write transliterated words (Shabbos, Bereishis, Moshe…) in Hebrew">א Transliterations → Hebrew</button>
             <label class="dv-file">Upload a file<input type="file" accept=".docx,.rtf,.txt,.md,.html,.htm,text/plain,text/rtf,text/html,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden></label>
-            <span class="dv-hint">Paste from Word, GoodNotes or a web page — bold and italics are kept.</span>
           </div>
-          <div id="dvText" class="dv-rich" contenteditable="true" dir="auto" role="textbox" aria-multiline="true" aria-label="The dvar Torah" data-ph="Paste the dvar Torah here — Hebrew, English or both. The pesukim and meforshim it quotes or names are found and linked.">${d ? d.html || plainToRich(d.text) : ""}</div>
-          <div class="dv-btns"><button type="button" class="dv-find">Find the sources</button><button type="button" class="dv-save" disabled>Save</button></div>
+          <div class="dv-panel" hidden></div>
+          <div id="dvText" class="dv-rich" contenteditable="true" dir="auto" role="textbox" aria-multiline="true" aria-label="The dvar Torah" data-ph="Paste the dvar Torah here — Hebrew, English or both. Bold and italics from Word, GoodNotes or a web page are kept. The pesukim and meforshim it quotes are found and linked by themselves.">${d ? d.html || plainToRich(d.text) : ""}</div>
+          <div class="dv-status" aria-live="polite"></div>
+          <div class="dv-btns"><button type="button" class="dv-save" disabled>Save</button></div>
           <div class="dv-found"></div>
         </div>
       </div>`;
-    const ed = $("#dvText"), save = $(".dv-save"), box = $(".dv-found"), sef = $("#dvSefer"), par = $("#dvParsha");
+    const ed = $("#dvText"), save = $(".dv-save"), box = $(".dv-found"), sef = $("#dvSefer"), par = $("#dvParsha"), panel = $(".dv-panel"), status = $(".dv-status");
     const fillParsha = () => { const s = sef.value; par.innerHTML = `<option value="">Parsha…</option>` + parshaOptions(null, s && book(s).section === "torah" ? s : s ? "-" : null); par.disabled = !!s && !INDEX.parshiot.some((p) => p.range[0] === s); };
     sef.value = onSefer(on) || ""; fillParsha(); par.value = on.p || "";
     sef.addEventListener("change", () => { const keep = par.value; fillParsha(); if (keep && parshaById(keep).range[0] === sef.value) par.value = keep; $(".dv-onnote").hidden = true; });
     par.addEventListener("change", () => { if (par.value) { const s = parshaById(par.value).range[0]; if (sef.value !== s) { sef.value = s; const keep = par.value; fillParsha(); par.value = keep; } } $(".dv-onnote").hidden = true; });
-    const curHTML = () => sanitizeRich(ed.innerHTML);
-    let src = d ? (d.src || []).slice() : null, srcText = d ? d.text : "";
-    const showFound = () => {
-      if (!src) { box.innerHTML = ""; return; }
-      const seen = new Map(); src.forEach((x) => { const k = srcKey(x); if (!seen.has(k)) seen.set(k, x); });
-      box.innerHTML = `<h2 class="dvar-sh">Found ${seen.size} source${seen.size === 1 ? "" : "s"} <span class="he">מקורות</span></h2>
-        <p class="dv-note">Each will be a link in the text. Remove any that isn't right.</p>` +
-        [...seen.entries()].map(([k, x]) => { const [le, lh] = srcLabel(x); const q = srcText.slice(x.a, x.b);
-          return `<div class="dt-srow"><span class="dv-q" dir="auto">“${esc(q.slice(0, 60))}${q.length > 60 ? "…" : ""}”</span> → <span class="en">${esc(le)}</span> <span class="he">${esc(lh)}</span>
-            <button type="button" class="dv-rm" data-k="${esc(k)}" aria-label="Remove this link">✕</button></div>`; }).join("");
+    // the text as the finder sees it (the editor's own DOM), its sources and mentions in the same offsets
+    let live = richText(ed), src = [], mentions = [], rejected = new Set(d && d.rej || []), busy = 0, dirty = false, timer = 0;
+    if (d) src = remapSrc(d.text || "", live.text, d.src || []).map((x) => Object.assign(x, { q: live.text.slice(x.a, x.b) }));
+    const paint = () => {
+      if (!window.CSS || !CSS.highlights || typeof Highlight === "undefined") return;
+      const rs = (list) => list.map((x) => rangeAt(ed, live.nodes, x.a, x.b)).filter(Boolean);
+      CSS.highlights.set("dvsrc", new Highlight(...rs(src.filter((x) => !x.m))));
+      CSS.highlights.set("dvman", new Highlight(...rs(src.filter((x) => x.m))));
+      CSS.highlights.set("dvmention", new Highlight(...rs(mentions)));
     };
-    showFound(); save.disabled = !d;
-    const find = async () => {
-      srcText = textOfRich(curHTML());
-      if (!srcText.trim()) { toast("Paste the dvar Torah first"); return false; }
-      $(".dv-find").disabled = true; box.innerHTML = `<p class="dv-note">Looking for pesukim and meforshim…</p>`;
-      try { src = await findSources(srcText); } catch (e) { src = []; }
-      $(".dv-find").disabled = false; save.disabled = false; showFound();
+    const showFound = () => {
+      const t = live.text;
+      const rows = src.map((x, n) => { const [le, lh] = srcLabel(x); const q = t.slice(x.a, x.b);
+        return `<div class="dt-srow${x.m ? " man" : ""}"><span class="dv-q" dir="auto">“${esc(q.slice(0, 70))}${q.length > 70 ? "…" : ""}”</span> → <span class="en">${esc(le)}</span> <span class="he">${esc(lh)}</span>${x.m ? ` <span class="dv-tag">linked by you</span>` : ""}
+          <button type="button" class="dv-rm" data-n="${n}" aria-label="Remove this link">✕</button></div>`; }).join("");
+      const ment = mentions.map((x, n) => `<div class="dt-srow ment"><span class="dv-q" dir="auto">“${esc(x.q)}”</span> <span class="dv-tag">${x.kind === "c" ? esc(commMeta(x.cid).en) + " — which comment?" : "which pasuk?"}</span>
+          <button type="button" class="dv-linkm" data-n="${n}">Link…</button></div>`).join("");
+      box.innerHTML = (src.length ? `<h2 class="dvar-sh">Linked · ${new Set(src.map(srcKey)).size} source${new Set(src.map(srcKey)).size === 1 ? "" : "s"} <span class="he">מקורות</span></h2><p class="dv-note">Found as you paste or type; remove any that isn't right, or select words and link them yourself.</p>${rows}` : "")
+        + (mentions.length ? `<h2 class="dvar-sh">Not linked yet</h2><p class="dv-note">These name a source without quoting it — link each to the pasuk or comment it means.</p>${ment}` : "");
+      paint();
+    };
+    const detect = async () => {
+      const my = ++busy; live = richText(ed);
+      if (!live.text.trim()) { src = []; mentions = []; status.textContent = ""; showFound(); return; }
+      status.textContent = "Finding the sources…";
+      const keep = relocate(src.filter((x) => x.m), live.text);
+      let r; try { r = await findSources(live.text, { keep, rejected }); } catch (e) { r = { src: keep, mentions: [] }; }
+      if (my !== busy) return;
+      live = richText(ed); src = relocate(r.src, live.text); mentions = r.mentions.filter((x) => live.text.slice(x.a, x.b) === x.q);
+      dirty = false; status.textContent = src.length ? `${new Set(src.map(srcKey)).size} source${new Set(src.map(srcKey)).size === 1 ? "" : "s"} linked` + (mentions.length ? ` · ${mentions.length} to link` : "") : mentions.length ? `${mentions.length} to link` : "No sources found yet";
+      showFound();
       if (!sef.value && !par.value && !$("#dvTopic").value.trim()) {
         const g = guessOn(src);
         if (g.s) { sef.value = g.s; fillParsha(); par.value = g.p || ""; $("#dvPerek").value = g.c || ""; $(".dv-onnote").hidden = false; }
       }
-      return true;
     };
-    $(".dv-find").addEventListener("click", find);
-    wireRichEditor(ed, () => { src = null; showFound(); save.disabled = !ed.textContent.trim(); });
-    $(".dv-tools", app).addEventListener("mousedown", (e) => { if (e.target.closest("[data-cmd]")) e.preventDefault(); });
-    $(".dv-tools", app).addEventListener("click", (e) => { const b = e.target.closest("[data-cmd]"); if (!b) return; ed.focus(); document.execCommand(b.dataset.cmd); src = null; showFound(); save.disabled = !ed.textContent.trim(); });
+    const changed = () => {
+      dirty = true; save.disabled = !ed.textContent.trim(); clearTimeout(timer); timer = setTimeout(detect, 700);
+      live = richText(ed); src = relocate(src, live.text); mentions = relocate(mentions, live.text); paint();
+    };
+    save.disabled = !d; if (d) detect(); else showFound();
+    wireRichEditor(ed, changed);
+    $(".dv-tools", app).addEventListener("mousedown", (e) => { if (e.target.closest("[data-cmd], .dv-linksel")) e.preventDefault(); });
+    $(".dv-tools", app).addEventListener("click", (e) => { const b = e.target.closest("[data-cmd]"); if (!b) return; ed.focus(); document.execCommand(b.dataset.cmd); changed(); });
+    // linking by hand: the words selected in the text, or a mention from the list
+    let selAB = null;
+    document.addEventListener("selectionchange", function onSel() {
+      if (!document.body.contains(ed)) { document.removeEventListener("selectionchange", onSel); return; }
+      const s = getSelection();
+      if (s.rangeCount && !s.isCollapsed && ed.contains(s.getRangeAt(0).commonAncestorContainer)) {
+        const r = s.getRangeAt(0); live = richText(ed);
+        const a = offsetOf(ed, live.nodes, r.startContainer, r.startOffset), b = offsetOf(ed, live.nodes, r.endContainer, r.endOffset);
+        if (a != null && b != null && b > a) { let x = a, y = b; while (x < y && /\s/.test(live.text[x])) x++; while (y > x && /\s/.test(live.text[y - 1])) y--; selAB = [x, y]; }
+      } else if (s.rangeCount && ed.contains(s.getRangeAt(0).commonAncestorContainer)) selAB = null;   // a click elsewhere in the text
+      $(".dv-linksel").disabled = !selAB;
+    });
+    const openPicker = (a, b, pre = {}) => {
+      const t = live.text, near = src.filter((x) => x.b <= a && x.v).sort((x, y) => y.b - x.b)[0] || src.find((x) => x.v);
+      const P = { k: pre.cid ? "c" : pre.k || "p", s: pre.s || (near && near.s) || sef.value || "genesis", c: pre.c || (near && near.c) || numOf($("#dvPerek").value) || 1, v: pre.v || (near && near.v) || numOf($("#dvPasuk").value) || 1, cid: pre.cid || "rashi", i: null };
+      panel.hidden = false;
+      const draw = async () => {
+        const cms = COMMENTARIES.filter((cm) => (INDEX.comm[cm.id] || []).includes(P.s));
+        if (P.k === "c" && !cms.some((cm) => cm.id === P.cid)) P.cid = cms[0] ? cms[0].id : "";
+        panel.innerHTML = `<div class="dv-pick">
+            <div class="dv-pq" dir="auto">Link “${esc(t.slice(a, b).slice(0, 90))}” to…</div>
+            <div class="sp-chips"><button type="button" data-k="p" class="${P.k === "p" ? "on" : ""}">A pasuk <span class="he">פסוק</span></button><button type="button" data-k="c" class="${P.k === "c" ? "on" : ""}" ${cms.length ? "" : "disabled"}>A meforash <span class="he">מפרש</span></button></div>
+            <div class="dv-prow"><select class="dvp-s">${seferOptions()}</select><input class="dvp-c" inputmode="numeric" value="${P.c}" aria-label="Perek" placeholder="Perek"><input class="dvp-v" inputmode="numeric" value="${P.v}" aria-label="Pasuk" placeholder="Pasuk">
+              ${P.k === "c" ? `<select class="dvp-m">${cms.map((cm) => `<option value="${cm.id}">${esc(cm.en)} · ${esc(cm.he)}</option>`).join("")}</select>` : ""}</div>
+            <div class="dvp-show" dir="rtl"></div>
+            <div class="dv-btns"><button type="button" class="dvp-ok" disabled>Link</button><button type="button" class="dvp-x">Cancel</button></div>
+          </div>`;
+        $(".dvp-s", panel).value = P.s; if ($(".dvp-m", panel)) $(".dvp-m", panel).value = P.cid;
+        const show = $(".dvp-show", panel), ok = $(".dvp-ok", panel);
+        const c = numOf($(".dvp-c", panel).value), v = numOf($(".dvp-v", panel).value); P.c = c; P.v = v;
+        const valid = c >= 1 && c <= book(P.s).verses.length && v >= 1 && v <= book(P.s).verses[c - 1];
+        if (!valid) { show.innerHTML = `<p class="dv-note">Choose a perek and pasuk.</p>`; ok.disabled = true; return; }
+        const HE = await fetchJSON("data/search/he.json").catch(() => null);
+        const pw = HE && HE[P.s] && HE[P.s][c - 1] ? HE[P.s][c - 1][v - 1] : "";
+        if (P.k === "p") { show.innerHTML = `<div class="dvp-pasuk"><b>${esc(refHe(P.s, c, v))}</b> ${esc(pw)}</div>`; ok.disabled = false; return; }
+        show.innerHTML = `<p class="dv-note">Loading…</p>`;
+        const data = await loadComm(P.cid, P.s).catch(() => null);
+        const list = data ? at(data, c, v) : [];
+        if (!list.length) { show.innerHTML = `<div class="dvp-pasuk"><b>${esc(refHe(P.s, c, v))}</b> ${esc(pw)}</div><p class="dv-note">${esc(commMeta(P.cid).en)} has no comment on this pasuk.</p>`; ok.disabled = true; return; }
+        if (P.i == null || P.i >= list.length) P.i = list.length === 1 ? 0 : null;
+        show.innerHTML = `<div class="dvp-pasuk"><b>${esc(refHe(P.s, c, v))}</b> ${esc(pw)}</div><p class="dv-note" dir="ltr">Which comment?</p>` + list.map((h, i) => {
+          const { heDH, heRest } = commParts(h, ""); const dh = htmlToText(heDH), rest = htmlToText(heRest);
+          return `<button type="button" class="dvp-c1${P.i === i ? " on" : ""}" data-i="${i}">${dh ? `<b>${esc(dh)}</b> ` : ""}${esc(rest.slice(0, 110))}${rest.length > 110 ? "…" : ""}</button>`; }).join("");
+        ok.disabled = P.i == null;
+      };
+      draw();
+      panel.onclick = (e) => {
+        const k = e.target.closest("[data-k]"); if (k && !k.disabled) { P.k = k.dataset.k; P.i = null; draw(); return; }
+        const c1 = e.target.closest(".dvp-c1"); if (c1) { P.i = +c1.dataset.i; $$(".dvp-c1", panel).forEach((x) => x.classList.toggle("on", x === c1)); $(".dvp-ok", panel).disabled = false; return; }
+        if (e.target.closest(".dvp-x")) { panel.hidden = true; panel.innerHTML = ""; return; }
+        if (e.target.closest(".dvp-ok")) {
+          const x = P.k === "c" ? { k: "c", s: P.s, c: P.c, v: P.v, cid: P.cid, i: P.i, a, b, m: 1 } : { k: "p", s: P.s, c: P.c, v: P.v, a, b, m: 1 };
+          x.q = live.text.slice(a, b);
+          src = src.filter((y) => !(y.a < b && a < y.b)).concat([x]).sort((p, q) => p.a - q.a);
+          mentions = mentions.filter((y) => !(y.a < b && a < y.b));
+          panel.hidden = true; panel.innerHTML = ""; showFound(); save.disabled = !ed.textContent.trim(); toast("Linked");
+        }
+      };
+      panel.onchange = (e) => {
+        if (e.target.matches(".dvp-s")) { P.s = e.target.value; P.c = 1; P.v = 1; P.i = null; $(".dvp-c", panel).value = 1; $(".dvp-v", panel).value = 1; }
+        if (e.target.matches(".dvp-m")) { P.cid = e.target.value; P.i = null; }
+        if (e.target.matches(".dvp-c, .dvp-v")) P.i = null;
+        draw();
+      };
+      panel.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    };
+    $(".dv-linksel", app).addEventListener("click", () => { if (selAB) openPicker(selAB[0], selAB[1]); });
+    box.addEventListener("click", (e) => {
+      const r = e.target.closest(".dv-rm");
+      if (r) { const x = src[+r.dataset.n]; if (!x.m) rejected.add(`${srcKey(x)}|${live.text.slice(x.a, x.b)}`); src.splice(+r.dataset.n, 1); showFound(); save.disabled = !ed.textContent.trim(); return; }
+      const l = e.target.closest(".dv-linkm");
+      if (l) { const x = mentions[+l.dataset.n]; openPicker(x.a, x.b, x.kind === "c" ? { cid: x.cid } : {}); }
+    });
+    // transliterated words → Hebrew (Shabbos → שבת, Bereishis → בראשית, Moshe → משה), after a look at the list
+    $(".dv-tlit", app).addEventListener("click", async () => {
+      if (!TRANSLIT) {
+        const rows = await fetchJSON("data/translit.json").catch(() => null);
+        if (!rows) { toast("The list of transliterations couldn't be loaded"); return; }
+        const map = new Map(rows.map(([lat, he, kind]) => [lat.toLowerCase(), { lat, he, kind }]));
+        const alt = rows.map((r) => r[0]).sort((x, y) => y.length - x.length).map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/[\s-]+/g, "[\\s-]+").replace(/'/g, "['’]?"));
+        TRANSLIT = { map, re: new RegExp(`(?<![A-Za-z'’\\u0590-\\u05FF])(${alt.join("|")})(?![A-Za-z]|['’]s\\b)`, "gi") };
+      }
+      const look = (w) => TRANSLIT.map.get(w.toLowerCase().replace(/[\s-]+/g, " ").replace(/’/g, "'")) || TRANSLIT.map.get(w.toLowerCase().replace(/[\s-]+/g, " ").replace(/['’]/g, "")) || TRANSLIT.map.get(w.toLowerCase().replace(/[\s]+/g, "-"));
+      const hits = new Map(), walker = document.createTreeWalker(ed, NodeFilter.SHOW_TEXT);
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        TRANSLIT.re.lastIndex = 0; let m;
+        while ((m = TRANSLIT.re.exec(n.data))) { const e2 = look(m[1]); if (!e2 || (e2.kind === "n" && !/^[A-Z]/.test(m[1]))) continue; const k = m[1]; const h = hits.get(k) || { he: e2.he, n: 0 }; h.n++; hits.set(k, h); }
+      }
+      panel.hidden = false;
+      if (!hits.size) { panel.innerHTML = `<div class="dv-pick"><p class="dv-note">No transliterated words found.</p><div class="dv-btns"><button type="button" class="dvp-x">Close</button></div></div>`; panel.onclick = (e) => { if (e.target.closest(".dvp-x")) { panel.hidden = true; panel.innerHTML = ""; } }; return; }
+      const list = [...hits.entries()].sort((a, b) => b[1].n - a[1].n || a[0].localeCompare(b[0]));
+      panel.innerHTML = `<div class="dv-pick"><div class="dv-pq">Write these in Hebrew? Untick any to keep as they are.</div>
+          <div class="dvt-list">${list.map(([k, h], i) => `<label class="dvt-row"><input type="checkbox" checked data-i="${i}"> <span>${esc(k)}</span> → <span class="he" dir="rtl">${esc(h.he)}</span>${h.n > 1 ? ` <span class="dv-tag">×${h.n}</span>` : ""}</label>`).join("")}</div>
+          <div class="dv-btns"><button type="button" class="dvt-ok">Change ${list.length === 1 ? "it" : `${list.length} words`}</button><button type="button" class="dvp-x">Cancel</button></div></div>`;
+      panel.onchange = null;
+      panel.onclick = (e) => {
+        if (e.target.closest(".dvp-x")) { panel.hidden = true; panel.innerHTML = ""; return; }
+        if (!e.target.closest(".dvt-ok")) return;
+        const on2 = new Map(); $$(".dvt-row input", panel).forEach((c) => { if (c.checked) { const [k, h] = list[+c.dataset.i]; on2.set(k, h.he); } });
+        const w2 = document.createTreeWalker(ed, NodeFilter.SHOW_TEXT), nodes = []; for (let n = w2.nextNode(); n; n = w2.nextNode()) nodes.push(n);
+        let changedN = 0; live = richText(ed);
+        const starts = new Map(live.nodes), edits = [];           // [where in the text, old length, new length]
+        for (const n of nodes) {
+          const st = starts.get(n); let shift = 0;
+          const v = n.data.replace(TRANSLIT.re, (all, w, off) => { if (!on2.has(w)) return all; changedN++; const h = on2.get(w); edits.push([st + off, all.length, h.length]); return h; });
+          if (v !== n.data) n.data = v;
+        }
+        const move = (x) => { let d = 0; for (const [p, o, nl] of edits) { if (p + o <= x) d += nl - o; else if (p < x) return p + d + nl; } return x + d; };
+        const t2 = richText(ed).text;
+        const shiftAll = (list) => list.map((x) => { const a = move(x.a), b = Math.max(move(x.b), a); return Object.assign({}, x, { a, b, q: t2.slice(a, b) }); });
+        src = shiftAll(src); mentions = shiftAll(mentions);
+        panel.hidden = true; panel.innerHTML = ""; toast(changedN ? `Changed ${changedN} word${changedN === 1 ? "" : "s"} to Hebrew` : "Nothing changed"); changed();
+      };
+    });
     $(".dv-file input", app).addEventListener("change", async (e) => {
       const file = e.target.files[0]; if (!file) return; e.target.value = "";
       const name = file.name.toLowerCase(); let html = "";
@@ -1238,20 +1465,22 @@
       if (!html) { toast("That file is empty"); return; }
       if (ed.textContent.trim()) ed.insertAdjacentHTML("beforeend", html); else ed.innerHTML = html;
       if (!$("#dvTitle").value.trim()) { const h = richHolder(html).querySelector("h3"); $("#dvTitle").value = h ? h.textContent.trim() : file.name.replace(/\.[^.]+$/, ""); }
-      src = null; showFound(); save.disabled = false; toast("File added");
+      changed(); toast("File added");
     });
-    box.addEventListener("click", (e) => { const b = e.target.closest(".dv-rm"); if (!b) return; src = src.filter((x) => srcKey(x) !== b.dataset.k); showFound(); });
     save.addEventListener("click", async () => {
-      if (!src && !(await find())) return;
-      const html = curHTML(), text = textOfRich(html);
-      if (text !== srcText) { src = await findSources(text).catch(() => []); srcText = text; }
+      clearTimeout(timer);
+      if (dirty) await detect();
+      live = richText(ed);
+      const html = sanitizeRich(ed.innerHTML), text = textOfRich(html);
+      const s2 = remapSrc(live.text, text, src).map((x) => { const o = Object.assign({}, x); delete o.q; return o; });
       const now = Date.now(), title = $("#dvTitle").value.trim() || text.trim().split("\n")[0].slice(0, 70);
       const onv = { s: sef.value || "", p: par.value || "", c: numOf($("#dvPerek").value), v: numOf($("#dvPasuk").value), topic: $("#dvTopic").value.trim() };
       Object.keys(onv).forEach((k) => { if (!onv[k]) delete onv[k]; });
-      const rec = { title, rabbi: $("#dvRabbi").value.trim(), on: onv, html, text, src, u: now };
+      const rec = { title, rabbi: $("#dvRabbi").value.trim(), on: onv, html, text, src: s2, rej: [...rejected], fv: 2, u: now };
       let x;
       if (d) { Object.assign(d, rec); x = d; }
       else { x = Object.assign({ id: now.toString(36) + Math.random().toString(36).slice(2, 6), t: now }, rec); divrei.push(x); }
+      if (window.CSS && CSS.highlights) ["dvsrc", "dvman", "dvmention"].forEach((k) => CSS.highlights.delete(k));
       saveDivrei(); toast("Dvar Torah saved"); location.hash = `#dvar-${x.id}`;
     });
   }
@@ -4193,7 +4422,7 @@
   }
   /* what can be downloaded for a sefer */
   const DL_KINDS = () => [
-    { id: "text", en: "Tanach text", sub: "Hebrew + English", he: "מקרא", files: (s) => [`data/text/${s}.json`, "data/search/he.json"] },
+    { id: "text", en: "Tanach text", sub: "Hebrew + English", he: "מקרא", files: (s) => [`data/text/${s}.json`, "data/search/he.json", "data/translit.json"] },
     ...COMMENTARIES.map((c) => ({ id: c.id, en: c.en, sub: c.note ? `with English · ${c.note} only` : "with English", he: c.he,
       files: (s) => avail(c, s) ? [c.dir + s + ".json", c.enDir && c.enDir + s + ".json", c.introDir && INDEX.intros && (INDEX.intros[c.id] || []).includes(s) && c.introDir + s + ".json", hasAlign(c.id, s) && alignUrl(c.id, s)].filter(Boolean) : [] })),
   ];
